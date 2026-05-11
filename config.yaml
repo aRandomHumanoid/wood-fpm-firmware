@@ -1,0 +1,58 @@
+# Wood FPM firmware configuration.
+# Values marked TBD must be measured/confirmed before running on hardware.
+
+machine:
+  # Workspace bounds, in mm, in the user-facing XY plane.
+  bounds:
+    x_min: -30.0
+    x_max:  30.0
+    y_min: -30.0
+    y_max:  30.0
+  v_max_mm_s:   20.0   # TBD: max workspace feedrate
+  a_max_mm_s2: 100.0   # TBD: max workspace acceleration
+  jog_step_mm:  1.0    # default UI jog increment
+  scan_feed_mm_s: 2.0  # slow feed during probing descent
+  rapid_feed_mm_s: 15.0
+
+kinematics:
+  # PPM parameters (Triangular-Bipyramid Lc/H/D/G form). TBD — measure on hardware.
+  Lc: 100.0
+  H:  20.0
+  D:  15.0
+  G:  60.0          # degrees
+  theta_max_deg: 25 # joint-angle envelope; soft limit before motor commands
+
+axes:
+  theta:            # motor 0 — drives PPM theta joint
+    epos_node: 1
+    serial_port: /dev/ttyUSB0
+    counts_per_rev: 1024   # encoder cpt
+    gear_ratio: 91         # TBD — GP 42 C reduction
+    invert: false
+    home_method: 34        # EPOS2 homing mode: index pulse, positive speed
+    home_speed_rpm: 50
+    home_accel_rpm_s: 500
+  phi:              # motor 1 — drives PPM phi joint
+    epos_node: 2
+    serial_port: /dev/ttyUSB0
+    counts_per_rev: 1024
+    gear_ratio: 91
+    invert: false
+    home_method: 34
+    home_speed_rpm: 50
+    home_accel_rpm_s: 500
+
+probe:
+  gpio_pin: 17       # BCM numbering
+  active_low: true   # NPN-NO: input pulled high, goes low on contact
+  debounce_us: 200
+
+network:
+  host: "0.0.0.0"    # 0.0.0.0 = LAN-accessible; 127.0.0.1 = local only
+  port: 5000
+
+driver:
+  # Set to true to run without hardware (kinematics + simulated motors + simulated probe).
+  # Useful for UI development on a non-Pi machine.
+  simulate: false
+  epos_library: libEposCmd.so.6.6.1.0

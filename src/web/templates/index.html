@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Wood FPM</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"
+          integrity="sha384-2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO"
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js" charset="utf-8"></script>
+</head>
+<body>
+  <header>
+    <h1>Wood FPM</h1>
+    <button id="estop" class="estop">E-STOP</button>
+  </header>
+
+  <main>
+    <section class="panel" id="status-panel">
+      <h2>Status</h2>
+      <div class="grid">
+        <div><span class="lbl">X</span><span id="pos-x" class="val">—</span> mm</div>
+        <div><span class="lbl">Y</span><span id="pos-y" class="val">—</span> mm</div>
+        <div><span class="lbl">Z</span><span id="pos-z" class="val">—</span> mm</div>
+        <div><span class="lbl">θ</span><span id="pos-th" class="val">—</span>°</div>
+        <div><span class="lbl">φ</span><span id="pos-ph" class="val">—</span>°</div>
+        <div><span class="lbl">Probe</span><span id="probe-led" class="led"></span></div>
+        <div><span class="lbl">Homed</span><span id="homed-led" class="led"></span></div>
+        <div><span class="lbl">Busy</span><span id="busy-led" class="led"></span></div>
+        <div><span class="lbl">Fault</span><span id="fault-led" class="led"></span></div>
+      </div>
+      <div id="last-error" class="err"></div>
+    </section>
+
+    <section class="panel" id="limits-panel">
+      <h2>Limits</h2>
+      <div class="grid">
+        <div><span class="lbl">X bounds</span><span id="lim-x" class="val">—</span> mm</div>
+        <div><span class="lbl">Y bounds</span><span id="lim-y" class="val">—</span> mm</div>
+        <div><span class="lbl">v_max</span><span id="lim-v" class="val">—</span> mm/s</div>
+        <div><span class="lbl">a_max</span><span id="lim-a" class="val">—</span> mm/s²</div>
+      </div>
+    </section>
+
+    <section class="panel" id="jog-panel">
+      <h2>Jog</h2>
+      <div class="jog-pad">
+        <button data-dx="0"  data-dy="1"  class="jog">Y+</button>
+        <button data-dx="-1" data-dy="0"  class="jog">X−</button>
+        <button id="home" class="home">Home</button>
+        <button data-dx="1"  data-dy="0"  class="jog">X+</button>
+        <button data-dx="0"  data-dy="-1" class="jog">Y−</button>
+      </div>
+      <label>Step (mm) <input type="number" id="jog-step" value="1" step="0.1" min="0.01" /></label>
+    </section>
+
+    <section class="panel" id="scan-panel">
+      <h2>Scan</h2>
+      <div class="form">
+        <label>X min <input type="number" id="s-xmin" value="-10" step="0.1" /></label>
+        <label>X max <input type="number" id="s-xmax" value="10"  step="0.1" /></label>
+        <label>Y max <input type="number" id="s-ymax" value="10"  step="0.1" /></label>
+        <label>Y min <input type="number" id="s-ymin" value="-10" step="0.1" /></label>
+        <label>Samples <input type="number" id="s-n" value="20" min="2" step="1" /></label>
+        <button id="run-scan">Run scan</button>
+        <button id="abort-scan">Abort</button>
+        <button id="clear-plot">Clear plot</button>
+      </div>
+      <div id="plot"></div>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

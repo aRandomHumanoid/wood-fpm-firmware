@@ -1,0 +1,10 @@
+numpy>=1.24
+pyyaml>=6.0
+flask>=2.3
+flask-socketio>=5.3
+python-engineio>=4.9
+python-socketio>=5.11
+simple-websocket>=1.0
+# Pi-only; falls back to a simulator if unavailable.
+pigpio>=1.78; platform_machine=="armv7l" or platform_machine=="aarch64"
+pytest>=7.0

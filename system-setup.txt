@@ -1,0 +1,20 @@
+Main Controller board:
+Rasperry Pi 3B+
+    - minimal Raspbian install with linux 4.9.59
+
+Motor Controller board:
+Maxon EPOS2 70/10 Controller
+    - connnected to Pi via serial
+    - 2 instances for 2 motors
+    - encoded 
+
+Motor:
+Maxon PN 860454
+    - Combination Gear: Planetary Gearhead GP 42 C Ø42 mm, 3 - 15 Nm, Ceramic Version
+    - motor: EC-i 40 Ø40 mm, brushless, 130 W, with Hall sensors
+    - Encoder: ENC 16 EASY XT, 1024 cpt
+
+Probe: 
+CNC 3D Touch Probe Edge Finder
+    - NPN-NO
+    - Connected to Pi GPIO pins
