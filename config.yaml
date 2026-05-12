@@ -49,6 +49,11 @@ axes:
     home_speed_rpm: 50
     home_accel_rpm_s: 500
     home_current_threshold_mA: 3000
+    # Allowed joint travel from the home/hard-stop, in degrees. After homing
+    # the firmware sets EPOS software position limits to [-travel, 0] (for
+    # positive homing) or [0, +travel] (for negative homing). Any move
+    # past the home or beyond this range is refused by the EPOS.
+    joint_travel_deg: 90
   phi:              # motor 1 — drives PPM phi joint
     epos_node: 1
     port_name: USB0
@@ -59,6 +64,7 @@ axes:
     home_speed_rpm: 50
     home_accel_rpm_s: 500
     home_current_threshold_mA: 3000
+    joint_travel_deg: 90
 
 probe:
   gpio_pin: 17       # BCM numbering

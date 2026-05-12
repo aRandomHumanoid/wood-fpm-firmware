@@ -27,6 +27,21 @@ from ..drivers.epos import (
 log = logging.getLogger(__name__)
 
 
+# EPOS homing methods grouped by the direction the motor spins to find home.
+_POSITIVE_HOMING_METHODS = frozenset({34, 23, 7, 2, 18, -1, -3})
+_NEGATIVE_HOMING_METHODS = frozenset({33, 27, 11, 1, 17, -2, -4})
+
+
+def _homing_direction(method: int) -> int:
+    """Return +1 if `method` homes in the positive motor direction, -1 if
+    negative, 0 if neither (e.g. HM_ACTUAL_POSITION = 35, which doesn't move)."""
+    if method in _POSITIVE_HOMING_METHODS:
+        return +1
+    if method in _NEGATIVE_HOMING_METHODS:
+        return -1
+    return 0
+
+
 @dataclass
 class AxisConfig:
     name: str
@@ -39,6 +54,7 @@ class AxisConfig:
     home_speed_rpm: int
     home_accel_rpm_s: int
     home_current_threshold_mA: int = 0  # only used by current-threshold methods (-1..-4)
+    joint_travel_deg: float = 90.0      # allowed travel from home position
 
     @property
     def counts_per_deg(self) -> float:
@@ -113,6 +129,9 @@ class MotionController:
         self._listeners: list[StateListener] = []
         self._stop_evt = threading.Event()
         self._action_lock = threading.Lock()  # serializes home/move/scan
+        # Per-axis position limits in motor counts; populated after home_all.
+        # None means "not yet homed — no limit applied".
+        self._pos_limits: dict[str, tuple[int, int] | None] = {"theta": None, "phi": None}
 
         self._configure_axes()
 
@@ -191,6 +210,7 @@ class MotionController:
                     axis.activate_pp_mode()
                     v_rpm, a_rpm_s = self._motor_profile_from_workspace()
                     axis.set_position_profile(v_rpm, a_rpm_s, a_rpm_s)
+                    self._apply_position_limits(axis, cfg)
                 self._set_state(homed=True, busy=False)
             except EposError as e:
                 log.error("homing failed: %s", e)
@@ -209,6 +229,9 @@ class MotionController:
             theta_counts = self.axis_theta_cfg.deg_to_counts(ik.theta_deg)
             phi_counts = self.axis_phi_cfg.deg_to_counts(ik.phi_deg)
 
+            self._check_position_limits("theta", theta_counts)
+            self._check_position_limits("phi", phi_counts)
+
             self._set_state(busy=True, last_error="")
             self._broadcast()
             try:
@@ -222,6 +245,44 @@ class MotionController:
             finally:
                 self._set_state(busy=False)
                 self._broadcast()
+
+    def _apply_position_limits(self, axis, cfg: AxisConfig):
+        """Configure both EPOS-side and Python-side position limits for one
+        axis after it has homed. Limits are derived from the homing direction
+        and ``cfg.joint_travel_deg``.
+
+        Positive homing → home is at the high end → allowed range [-travel, 0].
+        Negative homing → home is at the low  end → allowed range [0, +travel].
+        """
+        direction = _homing_direction(cfg.home_method)
+        if direction == 0:
+            log.warning("axis %s: home_method %d has no clear direction; "
+                        "skipping position limits", cfg.name, cfg.home_method)
+            return
+        travel_counts = int(round(cfg.joint_travel_deg * cfg.counts_per_deg))
+        if direction > 0:
+            lo, hi = -travel_counts, 0
+        else:
+            lo, hi = 0, travel_counts
+        try:
+            axis.set_position_limits(lo, hi)
+        except EposError as e:
+            log.error("axis %s: setting EPOS position limits failed: %s", cfg.name, e)
+            raise
+        self._pos_limits[cfg.name] = (lo, hi)
+        log.info("axis %s: position limits [%d, %d] counts (±%.1f° around home)",
+                 cfg.name, lo, hi, cfg.joint_travel_deg)
+
+    def _check_position_limits(self, axis_name: str, target_counts: int):
+        limits = self._pos_limits.get(axis_name)
+        if limits is None:
+            return  # axis not homed yet
+        lo, hi = limits
+        if target_counts < lo or target_counts > hi:
+            raise BoundsError(
+                f"{axis_name} target {target_counts} counts outside "
+                f"position limits [{lo}, {hi}]"
+            )
 
     def _wait_done_with_current_guard(self, timeout_s: float, poll_s: float = 0.02):
         """Block until both axes report target reached, halting and raising
@@ -254,6 +315,37 @@ class MotionController:
         with self._state_lock:
             x, y = self.state.x + dx, self.state.y + dy
         self.move_to(x, y, **kwargs)
+
+    def rotate_axis(self, name: str, joint_deg: float,
+                    wait: bool = True, timeout_s: float = 60.0):
+        """Rotate one axis (joint) by ``joint_deg`` relative to its current
+        position. Bypasses kinematics; useful for testing and for the CLI.
+        Honors the same post-homing position limits and overcurrent guard
+        that ``move_to`` uses."""
+        if name == "theta":
+            axis, cfg = self.axis_theta, self.axis_theta_cfg
+        elif name == "phi":
+            axis, cfg = self.axis_phi, self.axis_phi_cfg
+        else:
+            raise ValueError(f"unknown axis {name!r}; expected 'theta' or 'phi'")
+
+        with self._action_lock:
+            delta_counts = cfg.deg_to_counts(joint_deg)
+            target = axis.position() + delta_counts
+            self._check_position_limits(name, target)
+
+            self._set_state(busy=True, last_error="")
+            self._broadcast()
+            try:
+                axis.move_to(delta_counts, absolute=False)
+                if wait:
+                    self._wait_done_with_current_guard(timeout_s=timeout_s)
+            except (EposError, OvercurrentError) as e:
+                self._set_state(fault=True, last_error=str(e))
+                raise
+            finally:
+                self._set_state(busy=False)
+                self._broadcast()
 
     def halt(self):
         """Halt motion in place WITHOUT disabling drives. Used mid-scan."""

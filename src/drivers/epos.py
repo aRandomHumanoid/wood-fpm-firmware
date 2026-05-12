@@ -158,6 +158,14 @@ class EposDriver:
             c_void_p, c_uint, POINTER(c_uint), POINTER(c_uint),
         ]
 
+        # VCS_SetObject(handle, node, idx, subidx, void* data, uint nbytes,
+        #   uint* nbytesWritten, uint* err)
+        L.VCS_SetObject.restype = c_int
+        L.VCS_SetObject.argtypes = [
+            c_void_p, c_ushort, c_ushort, ctypes.c_ubyte,
+            c_void_p, c_uint, POINTER(c_uint), POINTER(c_uint),
+        ]
+
     def _err_text(self, code: int) -> str:
         buf = ctypes.create_string_buffer(256)
         self._lib.VCS_GetErrorInfo(code, buf, 256)
@@ -374,6 +382,28 @@ class EposAxis:
         if not ok:
             raise EposError("VCS_StopHoming", err.value, self.drv._err_text(err.value))
 
+    def set_position_limits(self, min_counts: int, max_counts: int):
+        """Configure the EPOS software position limits (object 0x607D).
+        Any subsequent move outside [min_counts, max_counts] is refused
+        by the firmware (statusword bit 11 'Internal limit active' is set)."""
+        for sub, value, label in (
+            (0x01, min_counts, "min"),
+            (0x02, max_counts, "max"),
+        ):
+            data = c_int(int(value))
+            nbytes = c_uint(0)
+            err = c_uint(0)
+            ok = self.drv._lib.VCS_SetObject(
+                self.drv._handle, self.node_id,
+                c_ushort(0x607D), ctypes.c_ubyte(sub),
+                byref(data), c_uint(4), byref(nbytes), byref(err),
+            )
+            if not ok:
+                raise EposError(
+                    f"VCS_SetObject(0x607D:{sub:02X} {label})",
+                    err.value, self.drv._err_text(err.value),
+                )
+
     def statusword(self) -> int:
         """Raw CiA 402 statusword (object 0x6041). Useful bits:
             bit  0..3: state machine
@@ -455,6 +485,9 @@ class SimulatedEposAxis:
 
     def stop_homing(self):
         self._move_started = None
+
+    def set_position_limits(self, min_counts: int, max_counts: int):
+        self._pos_min, self._pos_max = int(min_counts), int(max_counts)
 
     def statusword(self) -> int:
         return 0x1237 if getattr(self, "_homed", False) else 0x0237  # bit 12 set if homed
