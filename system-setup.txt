@@ -11,8 +11,9 @@ Maxon EPOS2 70/10 Controller
 Motor:
 Maxon PN 860454
     - Combination Gear: Planetary Gearhead GP 42 C Ø42 mm, 3 - 15 Nm, Ceramic Version
+    - 4.3:1 reduction: 203114
     - motor: EC-i 40 Ø40 mm, brushless, 130 W, with Hall sensors
-    - Encoder: ENC 16 EASY XT, 1024 cpt
+    - Encoder: ENC 16 EASY XT, 1024 cpt (EPOS decodes 4x quadrature -> 4096 counts/motor rev)
 
 Probe: 
 CNC 3D Touch Probe Edge Finder

@@ -23,20 +23,31 @@ kinematics:
   theta_max_deg: 25 # joint-angle envelope; soft limit before motor commands
 
 axes:
+  # Each EPOS2 has its own USB cable to the Pi. Maxon enumerates them as
+  # USB0, USB1, ... (not /dev/ttyUSB*). If the two motors come up swapped,
+  # flip USB0/USB1 here. epos_node is the controller's internal CAN id
+  # (factory default 1); change only if reconfigured via EPOS Studio.
+  #
+  # counts_per_rev = encoder counts per MOTOR-shaft revolution as reported
+  # by the EPOS. The ENC 16 EASY XT is 1024 cpt; the EPOS does 4x
+  # quadrature decoding (counts every edge on A and B), giving 1024 × 4 =
+  # 4096 counts per motor rev. gear_ratio is then the purely mechanical
+  # reduction. Total counts per output rev = counts_per_rev × gear_ratio
+  # = 4096 × 4.3 ≈ 17613.
   theta:            # motor 0 — drives PPM theta joint
     epos_node: 1
-    serial_port: /dev/ttyUSB0
-    counts_per_rev: 1024   # encoder cpt
-    gear_ratio: 91         # TBD — GP 42 C reduction
+    port_name: USB1
+    counts_per_rev: 4096   # 1024 cpt × 4x quadrature
+    gear_ratio: 4.3        # planetary reduction (motor -> joint)
     invert: false
     home_method: 34        # EPOS2 homing mode: index pulse, positive speed
     home_speed_rpm: 50
     home_accel_rpm_s: 500
   phi:              # motor 1 — drives PPM phi joint
-    epos_node: 2
-    serial_port: /dev/ttyUSB0
-    counts_per_rev: 1024
-    gear_ratio: 91
+    epos_node: 1
+    port_name: USB0
+    counts_per_rev: 4096
+    gear_ratio: 4.3
     invert: false
     home_method: 34
     home_speed_rpm: 50
@@ -55,4 +66,4 @@ driver:
   # Set to true to run without hardware (kinematics + simulated motors + simulated probe).
   # Useful for UI development on a non-Pi machine.
   simulate: false
-  epos_library: libEposCmd.so.6.6.1.0
+  epos_library: libEposCmd.so

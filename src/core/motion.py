@@ -31,9 +31,9 @@ log = logging.getLogger(__name__)
 class AxisConfig:
     name: str
     epos_node: int
-    serial_port: str
-    counts_per_rev: int
-    gear_ratio: float
+    port_name: str        # Maxon USB port label, e.g. "USB0" / "USB1"
+    counts_per_rev: int   # EPOS-reported counts per motor rev (encoder cpt × 4 for quadrature)
+    gear_ratio: float     # planetary reduction, motor -> joint
     invert: bool
     home_method: int
     home_speed_rpm: int
@@ -93,14 +93,19 @@ class MotionController:
         self.rapid_feed_mm_s = rapid_feed_mm_s
         self.scan_feed_mm_s = scan_feed_mm_s
 
-        # One EPOS device handle, two CAN nodes.
-        self.driver = make_driver(
+        # Each EPOS2 gateway has its own USB cable, so each gets its own driver.
+        self.driver_theta = make_driver(
             simulate=simulate,
             library_path=epos_library,
-            port_name=axis_theta.serial_port.split("/")[-1],
+            port_name=axis_theta.port_name,
         )
-        self.axis_theta = make_axis(self.driver, axis_theta.epos_node)
-        self.axis_phi = make_axis(self.driver, axis_phi.epos_node)
+        self.driver_phi = make_driver(
+            simulate=simulate,
+            library_path=epos_library,
+            port_name=axis_phi.port_name,
+        )
+        self.axis_theta = make_axis(self.driver_theta, axis_theta.epos_node)
+        self.axis_phi = make_axis(self.driver_phi, axis_phi.epos_node)
 
         self.state = State()
         self._state_lock = threading.Lock()
@@ -277,11 +282,12 @@ class MotionController:
             self.axis_phi.disable()
         except Exception:
             pass
-        if hasattr(self.driver, "close"):
-            try:
-                self.driver.close()
-            except Exception:
-                pass
+        for drv in (self.driver_theta, self.driver_phi):
+            if hasattr(drv, "close"):
+                try:
+                    drv.close()
+                except Exception:
+                    pass
 
     def _poll_loop(self, hz: float):
         period = 1.0 / hz

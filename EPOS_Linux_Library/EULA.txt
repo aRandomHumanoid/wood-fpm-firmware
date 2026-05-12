@@ -1,0 +1,100 @@
+﻿End User License Agreement
+
+This End User License Agreement (“EULA”) is entered into between maxon motor ag, Brünigstrasse 220, CH-6072 Sachseln ("maxon entity") and customer that accepted this agreement either by manual or elec-tronic signature, or by any type of electronic declaration of intent, such as by clicking a download button or similar. Acceptance of this agreement or using the software indicates that customer has read, under-stood and accepted these terms. If customer does not accept this EULA, customer must refrain from using the software.
+
+I.	Definitions
+"Affiliates" means all companies directly or indirectly owned or controlled by maxon entity's ultimate parent company, including maxon entity's ultimate parent company.
+
+"Documentation" means any documentation provided by maxon entity in connection with the software (print, PDF or integrated in the software) including – where applicable – API-documentation.
+
+"Eligible Products" means maxon product or service which are eligible to be used in connection with the software. Eligible products are listed in the Documentation or in connection with the download of soft-ware or are otherwise communicated to the customer (e.g. during the installation process).
+
+"maxon Products and Services" means any product or service provided by maxon entity or its Affiliates.
+
+"Software" means software including any modification made available by maxon entity or its Affiliates to customer as well as – where applicable – APIs associated with the software.
+
+
+II.	Software license
+maxon entity grants customer a non-exclusive, non-transferable, limited license to install and use the Software in executable form and use related Documentation for customer’s internal business purposes for the period of usage of Eligible Products by customer. 
+
+During the term of this EULA, maxon entity may, from time to time and in its sole discretion, make availa-ble to customer updates, upgrades, patches, fixes or new releases of or to the Software which can be downloaded and installed by the customer. All such modification of the Software and every supplemen-tary program code provided to customer shall be subject to the terms and restrictions set forth in this EULA. 
+
+Software may contain free and open-source software ("FOSS"). FOSS may be licensed by third parties under separate terms. If FOSS requires maxon entity to provide any free and open source software components used within the Software in source code form, maxon entity will provide it to customer up-on written request.
+
+All title, ownership, rights, and intellectual property rights in and to the Software and Documentation, and all copies of the Software and Documentation, shall remain with maxon entity and/or its Affiliates and licensors. All rights not expressly granted in this EULA are reserved to maxon entity and/or its Affili-ates and licensors. The Software is protected by Swiss copyright laws and applicable international trea-ties.
+
+III.	Customer obligations
+Unless otherwise provided in this EULA or permitted by mandatory applicable law, customer
+
+-	shall not transfer, loan, lease, publish, or use the Software to or for the benefit of any third party without the prior written consent of maxon entity;
+
+-	shall not reverse engineer, decompile, disassemble or otherwise attempt to discover the source code of the Software. Customer’s right to reverse engineer or decompile the Software according to statutory law or mandatory legal provisions, in particular if it is required in order to achieve the con-tractually warranted functionality or interoperability of the Software with other computer programs, remain unaffected thereby. Prior to any such attempt to reverse engineer, decompile, disassemble or otherwise attempt to discover the source code of Software, customer must require in writing that maxon entity provides the necessary information and documents to achieve the contractually war-ranted functionality or interoperability with other computer programs within a reasonable period of time;
+
+-	shall further not otherwise modify, adapt, or merge the Software. Customer will not use the Soft-ware for the purpose of developing or enhancing any customer or third-party software or other product that is competitive with the Software or maxon Products and Services. Customer shall use APIs only to the extent as described in the Documentation or API-documentation and only in the scope of authorized use of the Software;
+
+-	shall not use the Software in connection with non-Eligible Products, notably any product or service not provided by maxon entity or its Affiliates;
+
+-	may assign a third-party provider to provide installation and usage of the Software to customer (e.g. hosting, outsourcing). Software provided by a third-party provider to customer (e.g. via hosting, out-sourcing) must remain under exclusive access and control of customer at all times. Customer shall ensure that the third-party provider operates the Software only to the extent permitted in this EULA and for customer’s internal business purposes exclusively. Any actual or suspected unauthorized use or disclosure of the Software by customer's third-party provider shall immediately lead to termina-tion of customer's third-party provider’s access to the Software. Customer will indemnify and hold maxon entity and its Affiliates harmless from all claims, damages, fines, and costs (including attor-ney’s fees and expenses) arising in connection with customer’s third-party provider’s unauthorized use of the Software;
+
+-	is solely responsible for the security of customer’s systems and data, including maxon Products and Services and the associated software used by customer;
+
+-	is solely responsible for any incompatibilities that may occur due to any updates, upgrades, patches, fixes or new releases of or to the Software;
+
+-	is – subject to section V./A. of this EULA – solely liable for any claim or demand made against cus-tomer by any third party in connection with the Software. Customer further is liable for any breach of this EULA by any user of the Software;
+
+-	is solely responsible for operating Eligible Products by use of the Software solely within the specifica-tions set forth for each Eligible Product;
+
+-	is solely responsible not to ship, transport or export the Software to a country or to use it in any way if this is prohibited by export laws, regulations or ordinances of whatsoever kind.
+
+
+IV.	Warranties and disclaimers
+maxon entity provides the Software "as is" and disclaims all warranties regarding the Software including, without any limitation, warranties regarding the usability of the Software for a specific purpose. maxon entity further does not warrant that the operability of the Software will be uninterrupted or error free. Any communication about the Software by maxon entity or its Affiliates, notably the functionality of the Software, is for informational purposes only and constitutes no warranty. 
+
+
+V.	Liability and Indemnification
+A.	Indemnity for intellectual property infringement claims
+maxon entity will indemnify and defend, at its expense, any action brought against customer to the ex-tent that it is based on a claim that the Software infringes any intellectual property and will pay all dam-ages finally awarded against customer by a court of competent jurisdiction or agreed in a settlement, provided that Customer gives maxon entity
+
+-	prompt written notice of the claim
+-	all requested information and reasonable assistance related to the claim, and
+-	sole authority to defend or settle the claim.
+
+maxon entity will not admit liability or incur obligations on customer’s behalf without customer’s prior written consent, which shall not be unreasonably withheld.
+
+B.	Limitation of liability
+The entire liability of maxon entity and its Affiliates, for all claims and damages related to this EULA is waived to the fullest extent permitted by law. In no event will maxon entity and its Affiliates be liable for any indirect, incidental, consequential, or punitive damages, loss of production, interruption of opera-tions, or lost data or profits.
+
+VI.	Term and Termination
+This EULA terminates as soon as customer no longer has an Eligible Product in operational use. maxon entity further may immediately terminate this EULA upon notice to customer for reasonable cause, in-cluding, without limitation
+
+-	customer’s unauthorized installation or use of the Software (including unauthorized use by custom-er's third-party provider);
+-	customer filing or being filed in bankruptcy;
+-	customer ceasing to do business;
+-	for any other breach of this EULA by customer that remains uncured after 30 days’ notice thereof.
+
+Upon termination of this EULA, the licenses granted hereunder automatically terminate and customer shall immediately remove and destroy all copies of Software and Documentation or require its third-party provider to do so.
+
+
+VII.	General provisions
+Any Affiliate may exercise the rights and fulfil maxon entity's obligations under this EULA.
+
+This EULA and the licenses granted hereunder may not be assigned, sublicensed, or otherwise trans-ferred (by operation of law or otherwise) by customer without the prior written consent of maxon enti-ty.
+
+maxon entity reserves the right to modify or amend this EULA at any time and will duly notify customer of any such modification or amendment. By the continued use of the Software, customer agrees that any such modification or amendment shall be fully binding. Otherwise, the license shall be null and void and customer is no longer entitled to use the Software.
+
+If one or more provisions of this EULA should be or become invalid, void or ineffective, the parties shall negotiate in good faith to agree on valid and/or effective substitute provisions for such inva-lid/ineffective ones. The substituting provisions shall in their economic effect so closely resemble the invalid provisions that it can be reasonably assumed that the parties would have contracted on the basis of those new provisions. If such provisions cannot be agreed upon, then the invalidity of one or more of the provisions of this EULA shall not affect the validity of this EULA as a whole, unless the invalid provi-sions are of such essential importance for this EULA that it is to be reasonably assumed that the Parties would not have entered into this EULA without the invalid provisions.
+
+This EULA shall be subject to the laws of Switzerland without reference to any conflict of laws rules. Any dispute arising out of or in connection with this EULA shall be resolved by the competent courts in Zurich, Switzerland.
+
+If you have questions about this EULA or would like to receive information from MAXON, please use the following contact information:
+
+maxon motor ag
+Brünigstrasse 220
+CH-6072 Sachseln
+Switzerland
+
+Phone +41 41 666 15 00
+
+www.maxongroup.com
+
+© 2022 maxon. All rights reserved. | Edition 2022-08 | DocID rel10730

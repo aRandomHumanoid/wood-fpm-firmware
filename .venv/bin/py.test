@@ -1,4 +1,4 @@
-#!/home/chris/Documents/Github/wood-fpm-firmware/.venv/bin/python3
+#!/home/woodfpm/Documents/wood-fpm-firmware/.venv/bin/python3
 import sys
 from pytest import console_main
 if __name__ == '__main__':

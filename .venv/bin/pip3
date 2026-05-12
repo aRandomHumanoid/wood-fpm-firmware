@@ -1,4 +1,4 @@
-#!/home/chris/Documents/Github/wood-fpm-firmware/.venv/bin/python3
+#!/home/woodfpm/Documents/wood-fpm-firmware/.venv/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys
