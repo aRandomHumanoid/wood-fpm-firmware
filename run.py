@@ -26,7 +26,11 @@ def load_config(path: Path) -> dict:
 def build_controller(cfg: dict) -> tuple[MotionController, ProbeMonitor, ScanRunner]:
     m = cfg["machine"]
     bounds = MachineBounds(**m["bounds"])
-    limits = MotionLimits(v_max_mm_s=m["v_max_mm_s"], a_max_mm_s2=m["a_max_mm_s2"])
+    limits = MotionLimits(
+        v_max_mm_s=m["v_max_mm_s"],
+        a_max_mm_s2=m["a_max_mm_s2"],
+        overcurrent_mA=m.get("overcurrent_limit_mA", 0),
+    )
 
     k = cfg["kinematics"]
     kin = PPMKinematics(Lc=k["Lc"], H=k["H"], D=k["D"], G_deg=k["G"], theta_max_deg=k["theta_max_deg"])

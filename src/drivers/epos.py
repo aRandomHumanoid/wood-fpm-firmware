@@ -150,6 +150,14 @@ class EposDriver:
         L.VCS_StopHoming.restype = c_int
         L.VCS_StopHoming.argtypes = [c_void_p, c_ushort, POINTER(c_uint)]
 
+        # VCS_GetObject(handle, node, idx, subidx, void* data, uint nbytes,
+        #   uint* nbytesRead, uint* err)
+        L.VCS_GetObject.restype = c_int
+        L.VCS_GetObject.argtypes = [
+            c_void_p, c_ushort, c_ushort, ctypes.c_ubyte,
+            c_void_p, c_uint, POINTER(c_uint), POINTER(c_uint),
+        ]
+
     def _err_text(self, code: int) -> str:
         buf = ctypes.create_string_buffer(256)
         self._lib.VCS_GetErrorInfo(code, buf, 256)
@@ -321,6 +329,71 @@ class EposAxis:
             raise EposError("VCS_GetCurrentIsAveraged", err.value, self.drv._err_text(err.value))
         return int(cur.value)
 
+    def homing_state(self) -> tuple[bool, bool]:
+        """Return (attained, error) for the current/most-recent homing run."""
+        attained = c_int(0)
+        homing_err = c_int(0)
+        err = c_uint(0)
+        ok = self.drv._lib.VCS_GetHomingState(
+            self.drv._handle, self.node_id, byref(attained), byref(homing_err), byref(err)
+        )
+        if not ok:
+            raise EposError("VCS_GetHomingState", err.value, self.drv._err_text(err.value))
+        return bool(attained.value), bool(homing_err.value)
+
+    def get_homing_parameter(self) -> dict:
+        """Read back the EPOS's current homing parameters. Useful for verifying
+        a prior ``set_homing_parameter`` call actually took effect."""
+        accel = c_uint(0)
+        speed_switch = c_uint(0)
+        speed_index = c_uint(0)
+        offset = c_int(0)
+        threshold = c_ushort(0)
+        position = c_int(0)
+        err = c_uint(0)
+        ok = self.drv._lib.VCS_GetHomingParameter(
+            self.drv._handle, self.node_id,
+            byref(accel), byref(speed_switch), byref(speed_index),
+            byref(offset), byref(threshold), byref(position),
+            byref(err),
+        )
+        if not ok:
+            raise EposError("VCS_GetHomingParameter", err.value, self.drv._err_text(err.value))
+        return dict(
+            acceleration_rpm_s=accel.value,
+            home_speed_rpm=speed_switch.value,
+            zero_speed_rpm=speed_index.value,
+            offset_counts=offset.value,
+            current_threshold_mA=threshold.value,
+            position_counts=position.value,
+        )
+
+    def stop_homing(self):
+        err = c_uint(0)
+        ok = self.drv._lib.VCS_StopHoming(self.drv._handle, self.node_id, byref(err))
+        if not ok:
+            raise EposError("VCS_StopHoming", err.value, self.drv._err_text(err.value))
+
+    def statusword(self) -> int:
+        """Raw CiA 402 statusword (object 0x6041). Useful bits:
+            bit  0..3: state machine
+            bit  7: Warning
+            bit 11: Internal limit active (software position limits)
+            bit 12: Op-mode specific (homing mode: Homing attained)
+            bit 13: Op-mode specific (homing mode: Homing error)
+        """
+        data = c_ushort(0)
+        nbytes = c_uint(0)
+        err = c_uint(0)
+        ok = self.drv._lib.VCS_GetObject(
+            self.drv._handle, self.node_id,
+            c_ushort(0x6041), ctypes.c_ubyte(0x00),
+            byref(data), c_uint(2), byref(nbytes), byref(err),
+        )
+        if not ok:
+            raise EposError("VCS_GetObject(0x6041)", err.value, self.drv._err_text(err.value))
+        return int(data.value)
+
 
 # ---------------------------------------------------------------------------
 # Simulator
@@ -366,9 +439,25 @@ class SimulatedEposAxis:
         self._pos = 0
         self._target = 0
         self._move_started = None
+        self._homed = True
 
     def current_mA(self) -> int:
         return 0
+
+    def homing_state(self) -> tuple[bool, bool]:
+        return getattr(self, "_homed", False), False
+
+    def get_homing_parameter(self) -> dict:
+        return dict(
+            acceleration_rpm_s=500, home_speed_rpm=50, zero_speed_rpm=10,
+            offset_counts=0, current_threshold_mA=0, position_counts=0,
+        )
+
+    def stop_homing(self):
+        self._move_started = None
+
+    def statusword(self) -> int:
+        return 0x1237 if getattr(self, "_homed", False) else 0x0237  # bit 12 set if homed
 
     def move_to(self, target_counts: int, absolute: bool = True, immediately: bool = True):
         with self.drv._lock:

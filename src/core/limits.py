@@ -9,6 +9,11 @@ class BoundsError(ValueError):
     pass
 
 
+class OvercurrentError(RuntimeError):
+    """Raised when an axis's measured current exceeds the configured
+    overcurrent limit during a move. Motion is halted before the raise."""
+
+
 @dataclass(frozen=True)
 class MachineBounds:
     x_min: float
@@ -37,6 +42,7 @@ class MachineBounds:
 class MotionLimits:
     v_max_mm_s: float
     a_max_mm_s2: float
+    overcurrent_mA: int = 0  # 0 = disabled
 
     def clamp_velocity(self, v: float) -> float:
         return min(max(v, 0.0), self.v_max_mm_s)

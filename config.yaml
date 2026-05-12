@@ -13,6 +13,11 @@ machine:
   jog_step_mm:  1.0    # default UI jog increment
   scan_feed_mm_s: 2.0  # slow feed during probing descent
   rapid_feed_mm_s: 15.0
+  # Per-axis motor current ceiling. Any move that observes |current| above
+  # this on either axis halts both motors and raises OvercurrentError.
+  # Homing uses its own threshold (axes.*.home_current_threshold_mA); this
+  # limit is a safety net above it. Set to 0 to disable.
+  overcurrent_limit_mA: 6000
 
 kinematics:
   # PPM parameters (Triangular-Bipyramid Lc/H/D/G form). TBD — measure on hardware.
@@ -40,18 +45,20 @@ axes:
     counts_per_rev: 4096   # 1024 cpt × 4x quadrature
     gear_ratio: 4.3        # planetary reduction (motor -> joint)
     invert: false
-    home_method: 34        # EPOS2 homing mode: index pulse, positive speed
+    home_method: -3        # EPOS2 homing: current threshold, positive speed (hard stop)
     home_speed_rpm: 50
     home_accel_rpm_s: 500
+    home_current_threshold_mA: 3000
   phi:              # motor 1 — drives PPM phi joint
     epos_node: 1
     port_name: USB0
     counts_per_rev: 4096
     gear_ratio: 4.3
     invert: false
-    home_method: 34
+    home_method: -3
     home_speed_rpm: 50
     home_accel_rpm_s: 500
+    home_current_threshold_mA: 3000
 
 probe:
   gpio_pin: 17       # BCM numbering

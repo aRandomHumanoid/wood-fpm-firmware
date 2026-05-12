@@ -15,7 +15,7 @@ from dataclasses import dataclass, asdict
 from typing import Callable, Dict, Optional
 
 from .kinematics import PPMKinematics, KinematicsResult
-from .limits import MachineBounds, MotionLimits, BoundsError
+from .limits import MachineBounds, MotionLimits, BoundsError, OvercurrentError
 from ..drivers.epos import (
     EposError,
     HOMING_INDEX_POS,
@@ -38,6 +38,7 @@ class AxisConfig:
     home_method: int
     home_speed_rpm: int
     home_accel_rpm_s: int
+    home_current_threshold_mA: int = 0  # only used by current-threshold methods (-1..-4)
 
     @property
     def counts_per_deg(self) -> float:
@@ -184,6 +185,7 @@ class MotionController:
                         method=cfg.home_method,
                         home_speed_rpm=cfg.home_speed_rpm,
                         acceleration_rpm_s=cfg.home_accel_rpm_s,
+                        current_threshold_mA=cfg.home_current_threshold_mA,
                     )
                     axis.find_home(timeout_s=120.0)
                     axis.activate_pp_mode()
@@ -213,14 +215,40 @@ class MotionController:
                 self.axis_theta.move_to(theta_counts, absolute=True)
                 self.axis_phi.move_to(phi_counts, absolute=True)
                 if wait:
-                    self.axis_theta.wait_done(timeout_s=timeout_s)
-                    self.axis_phi.wait_done(timeout_s=timeout_s)
-            except EposError as e:
+                    self._wait_done_with_current_guard(timeout_s=timeout_s)
+            except (EposError, OvercurrentError) as e:
                 self._set_state(fault=True, last_error=str(e))
                 raise
             finally:
                 self._set_state(busy=False)
                 self._broadcast()
+
+    def _wait_done_with_current_guard(self, timeout_s: float, poll_s: float = 0.02):
+        """Block until both axes report target reached, halting and raising
+        OvercurrentError if either axis's |current| exceeds the configured
+        limit. Falls through to plain waits if no limit is configured."""
+        limit = self.limits.overcurrent_mA
+        if limit <= 0:
+            self.axis_theta.wait_done(timeout_s=timeout_s)
+            self.axis_phi.wait_done(timeout_s=timeout_s)
+            return
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            for axis, name in ((self.axis_theta, "theta"), (self.axis_phi, "phi")):
+                try:
+                    cur = axis.current_mA()
+                except EposError:
+                    continue  # transient read failure; retry next tick
+                if abs(cur) > limit:
+                    self.halt()
+                    raise OvercurrentError(
+                        f"{name} drew {cur} mA (>{limit} mA); move aborted"
+                    )
+            if self.axis_theta.target_reached() and self.axis_phi.target_reached():
+                return
+            time.sleep(poll_s)
+        raise EposError("_wait_done_with_current_guard", 0, "timeout waiting for axes")
 
     def jog(self, dx: float, dy: float, **kwargs):
         with self._state_lock:
