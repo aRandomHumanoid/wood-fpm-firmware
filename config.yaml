@@ -55,11 +55,15 @@ axes:
     # commutation-cogging regime (~30 RPM) for smooth motion.
     motor_velocity_rpm: 100
     motor_accel_rpm_s:  1000
-    # Allowed joint travel from the home/hard-stop, in degrees. After homing
-    # the firmware sets EPOS software position limits to [-travel, 0] (for
-    # positive homing) or [0, +travel] (for negative homing). Any move
-    # past the home or beyond this range is refused by the EPOS.
-    joint_travel_deg: 65
+    # User-facing max joint angle from home (encoder 0). The firmware's
+    # Python-side bounds check rejects any rotate / move whose target
+    # falls outside [0°, joint_travel_deg]; subsequent moves are refused
+    # with BoundsError BEFORE any motor is commanded. The EPOS-side
+    # software position limits are looser (extended by
+    # home_overshoot_margin_deg on both ends) so a few degrees of PID
+    # settling past 0 or joint_travel_deg don't trip Internal Limit
+    # Active. For negative homing, this becomes [-travel, 0] instead.
+    joint_travel_deg: 60
     # Encoder joint angle (post-gear) at which the platform is at the
     # KINEMATICS neutral pose (workspace origin). 0 = home is the neutral
     # pose. If home is a corner of a symmetric travel, set this to
@@ -72,10 +76,13 @@ axes:
     # subsequent move/rotate back to position 0 slams the joint into the
     # stop and trips Following Error.
     home_back_off_deg: 1.0
-    # Margin past 0 (toward the stop side) that the position limit allows,
-    # to absorb settling/overshoot when returning to home. Should be less
-    # than the back-off so the motor still can't drive into the stop, but
-    # large enough that an honest "back to 0" move doesn't trip BoundsError.
+    # Margin (in degrees) by which the EPOS-side software position limits
+    # extend past the Python-side strict bounds, on BOTH ends. The Python
+    # bounds reject obviously-bad commands cleanly with BoundsError; the
+    # EPOS bounds absorb PID settling overshoot so a few degrees past 0
+    # or joint_travel_deg doesn't fault the drive with Internal Limit
+    # Active. Keep ≤ home_back_off_deg if you want a hard guarantee that
+    # the motor can never be commanded into the hard stop.
     home_overshoot_margin_deg: 5.0
   phi:              # motor 1 — drives PPM phi joint
     epos_node: 1
@@ -89,7 +96,7 @@ axes:
     home_current_threshold_mA: 2000
     motor_velocity_rpm: 100
     motor_accel_rpm_s:  1000
-    joint_travel_deg: 65
+    joint_travel_deg: 60
     home_offset_deg: 30
     home_back_off_deg: 1.0
     home_overshoot_margin_deg: 5.0

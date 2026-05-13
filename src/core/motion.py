@@ -234,25 +234,17 @@ class MotionController:
                         axis.clear_fault()
                     axis.enable()
                     axis.activate_homing_mode()
-                    # If a back-off is configured, encode it into the EPOS's
-                    # HomeOffset so the drive itself: (1) drives to stop,
-                    # (2) backs off by HomeOffset counts, (3) zeroes at the
-                    # back-off point — all in homing mode, one atomic routine.
-                    direction = _homing_direction(cfg.home_method)
-                    back_off_counts = 0
-                    if direction != 0 and cfg.home_back_off_deg > 0:
-                        back_off_counts = -direction * int(round(
-                            cfg.home_back_off_deg * cfg.counts_per_deg
-                        ))
+                    # Homing without a built-in HomeOffset; the EPOS will
+                    # zero at the stop. We do the back-off explicitly in
+                    # PP mode below — that's deterministic across firmware
+                    # versions, where HomeOffset interpretation isn't.
                     axis.set_homing_parameter(
                         method=cfg.home_method,
                         home_speed_rpm=cfg.home_speed_rpm,
                         acceleration_rpm_s=cfg.home_accel_rpm_s,
-                        offset_counts=back_off_counts,
                         current_threshold_mA=cfg.home_current_threshold_mA,
                     )
-                    log.info("axis %s: homing (method=%d, back_off=%d counts)",
-                             cfg.name, cfg.home_method, back_off_counts)
+                    log.info("axis %s: homing (method=%d)", cfg.name, cfg.home_method)
                     axis.find_home(timeout_s=120.0)
                     # Hardstop homing usually trips a Following Error when
                     # the joint stalls against the mechanism just before
@@ -268,8 +260,28 @@ class MotionController:
                         cfg.motor_accel_rpm_s,
                         cfg.motor_accel_rpm_s,
                     )
-                    # Issue a hold target at the current position so the
-                    # PP-mode controller is actively maintaining it.
+
+                    # Explicit back-off from the hard stop. After find_home
+                    # the EPOS has set position=0 *at the stop*. We move
+                    # the motor away from the stop in PP mode, wait for
+                    # that move to complete, then re-zero so encoder 0 is
+                    # the safe back-off point — not the stop.
+                    direction = _homing_direction(cfg.home_method)
+                    if direction != 0 and cfg.home_back_off_deg > 0:
+                        back_off_counts = -direction * int(round(
+                            cfg.home_back_off_deg * cfg.counts_per_deg
+                        ))
+                        log.info("axis %s: backing off %d counts (%.2f°)",
+                                 cfg.name, back_off_counts, cfg.home_back_off_deg)
+                        axis.move_to(back_off_counts, absolute=False)
+                        axis.wait_done(timeout_s=10.0)
+                        # Small settle delay so DefinePosition doesn't race
+                        # the controller still bringing the motor to rest.
+                        time.sleep(0.1)
+                        axis.define_position(0)
+
+                    # Set a fresh hold target at the (now-zero) position so
+                    # the PP-mode controller actively maintains it.
                     pos_after_home = axis.position()
                     axis.move_to(pos_after_home, absolute=True)
                     log.info("axis %s: post-homing position = %d counts",
@@ -325,24 +337,32 @@ class MotionController:
             log.warning("axis %s: home_method %d has no clear direction; "
                         "skipping position limits", cfg.name, cfg.home_method)
             return
-        # If we backed off from the hard stop and re-zeroed there, the
-        # effective travel from the new home is the original mechanical
-        # range minus the back-off amount.
-        effective_travel_deg = max(cfg.joint_travel_deg - cfg.home_back_off_deg, 0.0)
-        travel_counts = int(round(effective_travel_deg * cfg.counts_per_deg))
+        # Two-tier limits:
+        #   - Python (strict, no margin): rejects commands outside [0, max]
+        #     up front with BoundsError. This is what user-facing rotate /
+        #     move commands hit.
+        #   - EPOS hardware (loose, with overshoot margin both sides):
+        #     allows the controller's settling/hunting a few degrees past
+        #     the strict bounds without tripping Internal Limit Active.
+        travel_counts = int(round(cfg.joint_travel_deg * cfg.counts_per_deg))
         margin_counts = int(round(cfg.home_overshoot_margin_deg * cfg.counts_per_deg))
         if direction > 0:
-            lo, hi = -travel_counts, margin_counts
+            py_lo, py_hi = -travel_counts, 0
+            epos_lo, epos_hi = -travel_counts - margin_counts, margin_counts
         else:
-            lo, hi = -margin_counts, travel_counts
+            py_lo, py_hi = 0, travel_counts
+            epos_lo, epos_hi = -margin_counts, travel_counts + margin_counts
         try:
-            axis.set_position_limits(lo, hi)
+            axis.set_position_limits(epos_lo, epos_hi)
         except EposError as e:
             log.error("axis %s: setting EPOS position limits failed: %s", cfg.name, e)
             raise
-        self._pos_limits[cfg.name] = (lo, hi)
-        log.info("axis %s: position limits [%d, %d] counts (±%.1f° around home)",
-                 cfg.name, lo, hi, cfg.joint_travel_deg)
+        self._pos_limits[cfg.name] = (py_lo, py_hi)
+        log.info(
+            "axis %s: Python limits [%d, %d] counts, "
+            "EPOS limits [%d, %d] counts (±%.1f° margin)",
+            cfg.name, py_lo, py_hi, epos_lo, epos_hi, cfg.home_overshoot_margin_deg,
+        )
 
     def _check_position_limits(self, axis_name: str, target_counts: int):
         limits = self._pos_limits.get(axis_name)

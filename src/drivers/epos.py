@@ -276,6 +276,17 @@ class EposAxis:
         return bool(state.value)
 
     def wait_done(self, timeout_s: float = 30.0, poll_s: float = 0.02):
+        """Block until ``target_reached`` (statusword bit 10) is set.
+
+        Includes a short initial wait for the bit to first CLEAR so a stale
+        True left over from the previous move doesn't make us think the new
+        move finished instantly — the same race we fixed in
+        ``wait_for_homing_attained``."""
+        early_deadline = time.monotonic() + 0.5
+        while time.monotonic() < early_deadline:
+            if not self.target_reached():
+                break
+            time.sleep(0.01)
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             if self.target_reached():

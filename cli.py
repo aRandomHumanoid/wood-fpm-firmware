@@ -237,6 +237,29 @@ class FPMShell(cmd.Cmd):
         self.motion.stop()
         print("halted and disabled — run 'enable' or 'home' to re-engage")
 
+    def do_clear_faults(self, arg: str):
+        """clear_faults — clear fault state on both drives.
+        Run this if `status` / a previous command left an axis in a fault
+        and you want to recover without re-homing. Follow with `enable`."""
+        if arg.strip():
+            print("usage: clear_faults")
+            return
+        for axis, name in (
+            (self.motion.axis_theta, "theta"),
+            (self.motion.axis_phi,   "phi"),
+        ):
+            was_faulted = False
+            if hasattr(axis, "fault_state"):
+                try:
+                    was_faulted = axis.fault_state()
+                except EposError:
+                    pass
+            try:
+                axis.clear_fault()
+                print(f"{name}: cleared" + ("  (was faulted)" if was_faulted else ""))
+            except EposError as e:
+                print(f"{name}: EPOS ERROR {e}")
+
     def do_enable(self, arg: str):
         """enable — re-engage both drives in profile-position mode
         (use after 'stop' or a fault)."""

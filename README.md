@@ -6,6 +6,10 @@ LAN-accessible web UI.
 
 ## Hardware
 
+Note that a blinking green light means not enabled, 
+a solid green line means enabled, 
+and a solid red light means error.
+
 See [`system-setup.txt`](system-setup.txt). Inverse kinematics adapted from
 [`inverse-example.txt`](inverse-example.txt).
 
