@@ -68,6 +68,12 @@ class AxisConfig:
     # 0 (and any "rotate abs theta 0" command) is safe to hold/return to
     # instead of slamming back into the mechanism.
     home_back_off_deg: float = 0.0
+    # Margin past the home/back-off point (toward the hard-stop side) that
+    # the position limit allows. The controller commonly settles a handful
+    # of counts past 0 while returning to home; without a margin those
+    # counts trip the EPOS limit and raise BoundsError on benign moves
+    # like the second half of `wiggle`.
+    home_overshoot_margin_deg: float = 0.0
 
     @property
     def counts_per_deg(self) -> float:
@@ -324,10 +330,11 @@ class MotionController:
         # range minus the back-off amount.
         effective_travel_deg = max(cfg.joint_travel_deg - cfg.home_back_off_deg, 0.0)
         travel_counts = int(round(effective_travel_deg * cfg.counts_per_deg))
+        margin_counts = int(round(cfg.home_overshoot_margin_deg * cfg.counts_per_deg))
         if direction > 0:
-            lo, hi = -travel_counts, 0
+            lo, hi = -travel_counts, margin_counts
         else:
-            lo, hi = 0, travel_counts
+            lo, hi = -margin_counts, travel_counts
         try:
             axis.set_position_limits(lo, hi)
         except EposError as e:

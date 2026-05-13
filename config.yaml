@@ -72,6 +72,11 @@ axes:
     # subsequent move/rotate back to position 0 slams the joint into the
     # stop and trips Following Error.
     home_back_off_deg: 1.0
+    # Margin past 0 (toward the stop side) that the position limit allows,
+    # to absorb settling/overshoot when returning to home. Should be less
+    # than the back-off so the motor still can't drive into the stop, but
+    # large enough that an honest "back to 0" move doesn't trip BoundsError.
+    home_overshoot_margin_deg: 5.0
   phi:              # motor 1 — drives PPM phi joint
     epos_node: 1
     port_name: USB0
@@ -87,6 +92,7 @@ axes:
     joint_travel_deg: 65
     home_offset_deg: 30
     home_back_off_deg: 1.0
+    home_overshoot_margin_deg: 5.0
 
 probe:
   gpio_pin: 17       # BCM numbering
