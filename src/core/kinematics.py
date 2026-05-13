@@ -19,6 +19,12 @@ from typing import Tuple
 import numpy as np
 
 
+class KinematicsError(ValueError):
+    """Raised when forward kinematics can't produce a finite (x, y, z) for
+    the given joint angles — typically the home/origin pose, where the PPM
+    link triangle is flat and the trilateration determinant goes to zero."""
+
+
 @dataclass
 class KinematicsResult:
     ok: bool
@@ -61,8 +67,14 @@ class PPMKinematics:
         # Cache the end-effector position at the home configuration so
         # forward_kinematics() can return user-facing offsets where (0,0,*)
         # is the home pose. (The raw N6 in the example is not zero at home.)
+        # The home pose is itself near-singular for the trilateration, so
+        # silence the numerical warnings here and fall back to (0, 0, 0)
+        # when the math can't produce a finite answer.
         self._home_xyz: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-        self._home_xyz = self._raw_forward(0.0, 0.0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            home = self._raw_forward(0.0, 0.0)
+        if all(np.isfinite(home)):
+            self._home_xyz = home
 
     # -------------------- math helpers --------------------
 
@@ -133,8 +145,19 @@ class PPMKinematics:
         The X and Y components are reported relative to the home pose so that
         ``forward_kinematics(0, 0) == (0, 0, z_home)``. Z is the absolute
         height returned by the raw mechanism math.
+
+        Raises ``KinematicsError`` if the result is non-finite — this happens
+        in the singular region around the home pose where the trilateration
+        determinant collapses, and at joint angles well outside the workspace
+        envelope.
         """
-        x, y, z = self._raw_forward(theta, phi)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            x, y, z = self._raw_forward(theta, phi)
+        if not np.isfinite(x) or not np.isfinite(y) or not np.isfinite(z):
+            raise KinematicsError(
+                f"forward kinematics singular at theta={np.rad2deg(theta):.3f}°, "
+                f"phi={np.rad2deg(phi):.3f}°"
+            )
         hx, hy, _hz = self._home_xyz
         return x - hx, y - hy, z
 

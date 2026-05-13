@@ -17,7 +17,7 @@ machine:
   # this on either axis halts both motors and raises OvercurrentError.
   # Homing uses its own threshold (axes.*.home_current_threshold_mA); this
   # limit is a safety net above it. Set to 0 to disable.
-  overcurrent_limit_mA: 6000
+  overcurrent_limit_mA: 0
 
 kinematics:
   # PPM parameters (Triangular-Bipyramid Lc/H/D/G form). TBD — measure on hardware.
@@ -44,27 +44,49 @@ axes:
     port_name: USB1
     counts_per_rev: 4096   # 1024 cpt × 4x quadrature
     gear_ratio: 4.3        # planetary reduction (motor -> joint)
-    invert: false
-    home_method: -3        # EPOS2 homing: current threshold, positive speed (hard stop)
+    invert: true
+    home_method: -3        # EPOS2 homing: current threshold, negative speed (CCW into hard stop)
     home_speed_rpm: 50
     home_accel_rpm_s: 500
-    home_current_threshold_mA: 3000
+    home_current_threshold_mA: 2000
+    # Motor-shaft profile applied after homing and for direct rotate_axis
+    # commands. Workspace moves (move/jog) reuse it too; call MotionController
+    # .set_feed_mm_s() to override at runtime. Keep above the brushless
+    # commutation-cogging regime (~30 RPM) for smooth motion.
+    motor_velocity_rpm: 100
+    motor_accel_rpm_s:  1000
     # Allowed joint travel from the home/hard-stop, in degrees. After homing
     # the firmware sets EPOS software position limits to [-travel, 0] (for
     # positive homing) or [0, +travel] (for negative homing). Any move
     # past the home or beyond this range is refused by the EPOS.
-    joint_travel_deg: 90
+    joint_travel_deg: 65
+    # Encoder joint angle (post-gear) at which the platform is at the
+    # KINEMATICS neutral pose (workspace origin). 0 = home is the neutral
+    # pose. If home is a corner of a symmetric travel, set this to
+    # joint_travel_deg / 2 (e.g. 30 for a 60° range). Used to translate
+    # between encoder-frame angles (status, rotate) and kinematics-frame
+    # angles (move, forward kinematics).
+    home_offset_deg: 30
+    # After the EPOS reports homing-attained, back off this many degrees
+    # from the hard stop and re-zero the encoder there. Without this, a
+    # subsequent move/rotate back to position 0 slams the joint into the
+    # stop and trips Following Error.
+    home_back_off_deg: 1.0
   phi:              # motor 1 — drives PPM phi joint
     epos_node: 1
     port_name: USB0
     counts_per_rev: 4096
     gear_ratio: 4.3
-    invert: false
+    invert: true
     home_method: -3
     home_speed_rpm: 50
     home_accel_rpm_s: 500
-    home_current_threshold_mA: 3000
-    joint_travel_deg: 90
+    home_current_threshold_mA: 2000
+    motor_velocity_rpm: 100
+    motor_accel_rpm_s:  1000
+    joint_travel_deg: 65
+    home_offset_deg: 30
+    home_back_off_deg: 1.0
 
 probe:
   gpio_pin: 17       # BCM numbering

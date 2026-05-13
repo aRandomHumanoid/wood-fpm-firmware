@@ -98,8 +98,12 @@ class EposDriver:
         L.VCS_GetFaultState.restype = c_int
         L.VCS_GetFaultState.argtypes = [c_void_p, c_ushort, POINTER(c_int), POINTER(c_uint)]
 
+        # NB: position is a 32-bit signed int on the wire (Maxon's header says
+        # `long*`, but they meant Windows-LONG, i.e. int32). On Linux 64-bit
+        # `c_long` is 8 bytes — using it leaves the upper 4 bytes as 0, which
+        # corrupts negative readings into huge positive numbers.
         L.VCS_GetPositionIs.restype = c_int
-        L.VCS_GetPositionIs.argtypes = [c_void_p, c_ushort, POINTER(c_long), POINTER(c_uint)]
+        L.VCS_GetPositionIs.argtypes = [c_void_p, c_ushort, POINTER(c_int), POINTER(c_uint)]
 
         L.VCS_GetMovementState.restype = c_int
         L.VCS_GetMovementState.argtypes = [c_void_p, c_ushort, POINTER(c_int), POINTER(c_uint)]
@@ -107,8 +111,9 @@ class EposDriver:
         L.VCS_SetPositionProfile.restype = c_int
         L.VCS_SetPositionProfile.argtypes = [c_void_p, c_ushort, c_uint, c_uint, c_uint, POINTER(c_uint)]
 
+        # MoveToPosition target is also int32 (same Windows-LONG issue).
         L.VCS_MoveToPosition.restype = c_int
-        L.VCS_MoveToPosition.argtypes = [c_void_p, c_ushort, c_long, c_int, c_int, POINTER(c_uint)]
+        L.VCS_MoveToPosition.argtypes = [c_void_p, c_ushort, c_int, c_int, c_int, POINTER(c_uint)]
 
         # Real signature (from EposCmdLib Definitions.h):
         #   VCS_SetHomingParameter(handle, nodeId,
@@ -149,6 +154,10 @@ class EposDriver:
         # VCS_StopHoming(handle, node, uint* err)
         L.VCS_StopHoming.restype = c_int
         L.VCS_StopHoming.argtypes = [c_void_p, c_ushort, POINTER(c_uint)]
+
+        # VCS_DefinePosition(handle, node, int newPositionCounts, uint* err)
+        L.VCS_DefinePosition.restype = c_int
+        L.VCS_DefinePosition.argtypes = [c_void_p, c_ushort, c_int, POINTER(c_uint)]
 
         # VCS_GetObject(handle, node, idx, subidx, void* data, uint nbytes,
         #   uint* nbytesRead, uint* err)
@@ -234,7 +243,7 @@ class EposAxis:
         ok = self.drv._lib.VCS_MoveToPosition(
             self.drv._handle,
             self.node_id,
-            c_long(int(target_counts)),
+            c_int(int(target_counts)),
             c_int(1 if absolute else 0),
             c_int(1 if immediately else 0),
             byref(err),
@@ -251,7 +260,7 @@ class EposAxis:
 
     # ----- feedback -----
     def position(self) -> int:
-        pos = c_long(0)
+        pos = c_int(0)
         err = c_uint(0)
         ok = self.drv._lib.VCS_GetPositionIs(self.drv._handle, self.node_id, byref(pos), byref(err))
         if not ok:
@@ -326,7 +335,39 @@ class EposAxis:
 
     def find_home(self, timeout_s: float = 60.0):
         self.start_homing()
-        self.wait_done(timeout_s=timeout_s, poll_s=0.05)
+        self.wait_for_homing_attained(timeout_s=timeout_s)
+
+    def wait_for_homing_attained(self, timeout_s: float = 60.0, poll_s: float = 0.05):
+        """Block until the EPOS reports the homing-attained bit (statusword
+        bit 12 in homing mode). Do NOT use ``wait_done`` here — that polls
+        bit 10 ("target reached"), which is set at standstill independently
+        of homing progress and will return immediately if the bit was still
+        set from a previous homing run.
+
+        Also waits up to ~0.5 s for the previously-attained bit to clear,
+        so we don't false-positive on the millisecond between issuing
+        VCS_FindHome and the EPOS firmware clearing the bit."""
+        early_deadline = time.monotonic() + 0.5
+        while time.monotonic() < early_deadline:
+            attained, homing_err = self.homing_state()
+            if homing_err:
+                raise EposError("wait_for_homing_attained", 0,
+                                "EPOS reported homing error during start")
+            if not attained:
+                break  # bit cleared — homing has actually begun
+            time.sleep(0.01)
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            attained, homing_err = self.homing_state()
+            if homing_err:
+                raise EposError("wait_for_homing_attained", 0,
+                                "EPOS reported homing error")
+            if attained:
+                return
+            time.sleep(poll_s)
+        raise EposError("wait_for_homing_attained", 0,
+                        f"timeout after {timeout_s:.1f}s")
 
     def current_mA(self) -> int:
         """Filtered motor current in mA (signed; sign indicates direction)."""
@@ -381,6 +422,17 @@ class EposAxis:
         ok = self.drv._lib.VCS_StopHoming(self.drv._handle, self.node_id, byref(err))
         if not ok:
             raise EposError("VCS_StopHoming", err.value, self.drv._err_text(err.value))
+
+    def define_position(self, position_counts: int):
+        """Tell the EPOS that the current physical position equals
+        ``position_counts``. Used to re-zero after a post-homing back-off so
+        the encoder reading of 0 doesn't coincide with the hard stop."""
+        err = c_uint(0)
+        ok = self.drv._lib.VCS_DefinePosition(
+            self.drv._handle, self.node_id, c_int(int(position_counts)), byref(err)
+        )
+        if not ok:
+            raise EposError("VCS_DefinePosition", err.value, self.drv._err_text(err.value))
 
     def set_position_limits(self, min_counts: int, max_counts: int):
         """Configure the EPOS software position limits (object 0x607D).
@@ -486,6 +538,11 @@ class SimulatedEposAxis:
     def stop_homing(self):
         self._move_started = None
 
+    def define_position(self, position_counts: int):
+        self._pos = int(position_counts)
+        self._target = self._pos
+        self._move_started = None
+
     def set_position_limits(self, min_counts: int, max_counts: int):
         self._pos_min, self._pos_max = int(min_counts), int(max_counts)
 
@@ -536,6 +593,10 @@ class SimulatedEposAxis:
         self._pos = 0
         self._target = 0
         self._move_started = None
+        self._homed = True
+
+    def wait_for_homing_attained(self, timeout_s: float = 60.0, poll_s: float = 0.05):
+        self._homed = True
 
 
 def make_driver(simulate: bool, **kwargs):

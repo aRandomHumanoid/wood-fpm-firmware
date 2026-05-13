@@ -42,7 +42,7 @@ from src.drivers.epos import (
 )
 
 # --- tuning knobs --------------------------------------------------------
-HOMING_DIRECTION = "positive"   # "positive" or "negative"
+HOMING_DIRECTION = "negative"   # "positive" or "negative"
 HOMING_SPEED_RPM = 50           # motor-shaft RPM during the search
 HOMING_ACCEL_RPM_S = 500        # motor-shaft accel/decel
 CURRENT_THRESHOLD_MA = 2000     # motor current that signals the hard stop

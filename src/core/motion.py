@@ -54,12 +54,28 @@ class AxisConfig:
     home_speed_rpm: int
     home_accel_rpm_s: int
     home_current_threshold_mA: int = 0  # only used by current-threshold methods (-1..-4)
+    motor_velocity_rpm: int = 100       # default PP-mode profile velocity (motor-shaft)
+    motor_accel_rpm_s: int = 1000       # default PP-mode profile accel/decel
     joint_travel_deg: float = 90.0      # allowed travel from home position
+    # Encoder joint angle (in degrees, post-gear) at which the platform sits
+    # in the KINEMATICS neutral pose. 0.0 means home itself is the neutral
+    # pose; for a joint homed to one corner of a symmetric travel, set this
+    # to joint_travel_deg / 2 (e.g. 30° for a 60° travel range).
+    home_offset_deg: float = 0.0
+    # After the EPOS reports homing-attained, move this many joint degrees
+    # AWAY from the hard stop and then re-zero the encoder there. The hard
+    # stop ends up just outside the post-homing position limits, so encoder
+    # 0 (and any "rotate abs theta 0" command) is safe to hold/return to
+    # instead of slamming back into the mechanism.
+    home_back_off_deg: float = 0.0
 
     @property
     def counts_per_deg(self) -> float:
         return self.gear_ratio * self.counts_per_rev / 360.0
 
+    # ENCODER frame: joint degrees as the motor encoder reports them
+    # (0 = home position). Used by rotate_axis, status, EPOS software
+    # position limits.
     def deg_to_counts(self, deg: float) -> int:
         v = deg * self.counts_per_deg
         return int(round(-v if self.invert else v))
@@ -67,6 +83,15 @@ class AxisConfig:
     def counts_to_deg(self, counts: int) -> float:
         v = counts / self.counts_per_deg
         return -v if self.invert else v
+
+    # KINEMATICS frame: joint degrees in the IK frame (0 = neutral pose).
+    # Offset by ``home_offset_deg`` from the encoder frame. Used by
+    # move_to / forward kinematics.
+    def kinematics_deg_to_counts(self, kdeg: float) -> int:
+        return self.deg_to_counts(kdeg + self.home_offset_deg)
+
+    def counts_to_kinematics_deg(self, counts: int) -> float:
+        return self.counts_to_deg(counts) - self.home_offset_deg
 
 
 @dataclass
@@ -144,8 +169,11 @@ class MotionController:
                     axis.clear_fault()
                 axis.enable()
                 axis.activate_pp_mode()
-                v_rpm, a_rpm_s = self._motor_profile_from_workspace()
-                axis.set_position_profile(v_rpm, a_rpm_s, a_rpm_s)
+                axis.set_position_profile(
+                    cfg.motor_velocity_rpm,
+                    cfg.motor_accel_rpm_s,
+                    cfg.motor_accel_rpm_s,
+                )
             except EposError as e:
                 log.error("axis %s setup: %s", cfg.name, e)
                 self._set_state(fault=True, last_error=str(e))
@@ -200,17 +228,49 @@ class MotionController:
                         axis.clear_fault()
                     axis.enable()
                     axis.activate_homing_mode()
+                    # If a back-off is configured, encode it into the EPOS's
+                    # HomeOffset so the drive itself: (1) drives to stop,
+                    # (2) backs off by HomeOffset counts, (3) zeroes at the
+                    # back-off point — all in homing mode, one atomic routine.
+                    direction = _homing_direction(cfg.home_method)
+                    back_off_counts = 0
+                    if direction != 0 and cfg.home_back_off_deg > 0:
+                        back_off_counts = -direction * int(round(
+                            cfg.home_back_off_deg * cfg.counts_per_deg
+                        ))
                     axis.set_homing_parameter(
                         method=cfg.home_method,
                         home_speed_rpm=cfg.home_speed_rpm,
                         acceleration_rpm_s=cfg.home_accel_rpm_s,
+                        offset_counts=back_off_counts,
                         current_threshold_mA=cfg.home_current_threshold_mA,
                     )
+                    log.info("axis %s: homing (method=%d, back_off=%d counts)",
+                             cfg.name, cfg.home_method, back_off_counts)
                     axis.find_home(timeout_s=120.0)
+                    # Hardstop homing usually trips a Following Error when
+                    # the joint stalls against the mechanism just before
+                    # the current threshold fires, which leaves the drive
+                    # in a Fault state (disabled). Clear it and re-enable
+                    # so the axis is ready for subsequent moves.
+                    if hasattr(axis, "clear_fault"):
+                        axis.clear_fault()
+                    axis.enable()
                     axis.activate_pp_mode()
-                    v_rpm, a_rpm_s = self._motor_profile_from_workspace()
-                    axis.set_position_profile(v_rpm, a_rpm_s, a_rpm_s)
+                    axis.set_position_profile(
+                        cfg.motor_velocity_rpm,
+                        cfg.motor_accel_rpm_s,
+                        cfg.motor_accel_rpm_s,
+                    )
+                    # Issue a hold target at the current position so the
+                    # PP-mode controller is actively maintaining it.
+                    pos_after_home = axis.position()
+                    axis.move_to(pos_after_home, absolute=True)
+                    log.info("axis %s: post-homing position = %d counts",
+                             cfg.name, pos_after_home)
                     self._apply_position_limits(axis, cfg)
+                    if hasattr(axis, "fault_state") and axis.fault_state():
+                        log.warning("axis %s still faulted after homing", cfg.name)
                 self._set_state(homed=True, busy=False)
             except EposError as e:
                 log.error("homing failed: %s", e)
@@ -226,8 +286,8 @@ class MotionController:
             if not ik.ok:
                 raise BoundsError(f"kinematics unreachable: {ik.reason}")
 
-            theta_counts = self.axis_theta_cfg.deg_to_counts(ik.theta_deg)
-            phi_counts = self.axis_phi_cfg.deg_to_counts(ik.phi_deg)
+            theta_counts = self.axis_theta_cfg.kinematics_deg_to_counts(ik.theta_deg)
+            phi_counts = self.axis_phi_cfg.kinematics_deg_to_counts(ik.phi_deg)
 
             self._check_position_limits("theta", theta_counts)
             self._check_position_limits("phi", phi_counts)
@@ -259,7 +319,11 @@ class MotionController:
             log.warning("axis %s: home_method %d has no clear direction; "
                         "skipping position limits", cfg.name, cfg.home_method)
             return
-        travel_counts = int(round(cfg.joint_travel_deg * cfg.counts_per_deg))
+        # If we backed off from the hard stop and re-zeroed there, the
+        # effective travel from the new home is the original mechanical
+        # range minus the back-off amount.
+        effective_travel_deg = max(cfg.joint_travel_deg - cfg.home_back_off_deg, 0.0)
+        travel_counts = int(round(effective_travel_deg * cfg.counts_per_deg))
         if direction > 0:
             lo, hi = -travel_counts, 0
         else:
@@ -312,16 +376,72 @@ class MotionController:
         raise EposError("_wait_done_with_current_guard", 0, "timeout waiting for axes")
 
     def jog(self, dx: float, dy: float, **kwargs):
-        with self._state_lock:
-            x, y = self.state.x + dx, self.state.y + dy
-        self.move_to(x, y, **kwargs)
+        """Relative workspace move. Reads the current pose from the encoders
+        each time so it works without a running state-poll thread."""
+        theta_kdeg = self.axis_theta_cfg.counts_to_kinematics_deg(self.axis_theta.position())
+        phi_kdeg = self.axis_phi_cfg.counts_to_kinematics_deg(self.axis_phi.position())
+        x, y, _ = self.kin.forward_kinematics(
+            math.radians(theta_kdeg), math.radians(phi_kdeg)
+        )
+        self.move_to(x + dx, y + dy, **kwargs)
+
+    def rotate_both_axes(self, joint_deg: float, absolute: bool = False,
+                         wait: bool = True, timeout_s: float = 60.0,
+                         velocity_rpm: int | None = None):
+        """Rotate both axes by (or to) the same joint angle simultaneously.
+        Both target counts are computed and limit-checked before either
+        motor is commanded, so a BoundsError aborts cleanly.
+
+        ``velocity_rpm`` (motor-shaft RPM) overrides the per-axis default
+        profile velocity just for this move; pass None to use config."""
+        with self._action_lock:
+            plan = []
+            for name, axis, cfg in (
+                ("theta", self.axis_theta, self.axis_theta_cfg),
+                ("phi",   self.axis_phi,   self.axis_phi_cfg),
+            ):
+                command_counts = cfg.deg_to_counts(joint_deg)
+                current = axis.position()
+                target = command_counts if absolute else current + command_counts
+                self._check_position_limits(name, target)
+                plan.append((name, axis, cfg, command_counts, current, target))
+
+            self._set_state(busy=True, last_error="")
+            self._broadcast()
+            try:
+                for name, axis, cfg, command_counts, current, target in plan:
+                    v_rpm = velocity_rpm if velocity_rpm is not None else cfg.motor_velocity_rpm
+                    axis.set_position_profile(
+                        v_rpm,
+                        cfg.motor_accel_rpm_s,
+                        cfg.motor_accel_rpm_s,
+                    )
+                    log.info(
+                        "rotate_both %s %s: current=%+d target=%+d (delta=%+d) @ %d rpm",
+                        name, "abs" if absolute else "rel",
+                        current, target, target - current, v_rpm,
+                    )
+                    axis.move_to(command_counts, absolute=absolute)
+                if wait:
+                    self._wait_done_with_current_guard(timeout_s=timeout_s)
+            except (EposError, OvercurrentError) as e:
+                self._set_state(fault=True, last_error=str(e))
+                raise
+            finally:
+                self._set_state(busy=False)
+                self._broadcast()
 
     def rotate_axis(self, name: str, joint_deg: float,
+                    absolute: bool = False,
                     wait: bool = True, timeout_s: float = 60.0):
-        """Rotate one axis (joint) by ``joint_deg`` relative to its current
-        position. Bypasses kinematics; useful for testing and for the CLI.
+        """Move one joint to/by ``joint_deg``.
+
+        ``absolute=False`` (default) → relative delta from the current pose.
+        ``absolute=True``             → absolute joint angle (post-gear).
+
         Honors the same post-homing position limits and overcurrent guard
-        that ``move_to`` uses."""
+        that ``move_to`` uses.
+        """
         if name == "theta":
             axis, cfg = self.axis_theta, self.axis_theta_cfg
         elif name == "phi":
@@ -330,14 +450,32 @@ class MotionController:
             raise ValueError(f"unknown axis {name!r}; expected 'theta' or 'phi'")
 
         with self._action_lock:
-            delta_counts = cfg.deg_to_counts(joint_deg)
-            target = axis.position() + delta_counts
+            command_counts = cfg.deg_to_counts(joint_deg)
+            current = axis.position()
+            if absolute:
+                target = command_counts
+            else:
+                target = current + command_counts
             self._check_position_limits(name, target)
+
+            log.debug(
+                "rotate_axis %s %s: joint=%+.3f° command_counts=%+d "
+                "current=%+d target=%+d",
+                name, "abs" if absolute else "rel",
+                joint_deg, command_counts, current, target,
+            )
 
             self._set_state(busy=True, last_error="")
             self._broadcast()
             try:
-                axis.move_to(delta_counts, absolute=False)
+                # Re-apply the per-axis motor profile in case something
+                # changed it (e.g. set_feed_mm_s from a prior workspace move).
+                axis.set_position_profile(
+                    cfg.motor_velocity_rpm,
+                    cfg.motor_accel_rpm_s,
+                    cfg.motor_accel_rpm_s,
+                )
+                axis.move_to(command_counts, absolute=absolute)
                 if wait:
                     self._wait_done_with_current_guard(timeout_s=timeout_s)
             except (EposError, OvercurrentError) as e:
@@ -418,8 +556,10 @@ class MotionController:
                 phi_counts = self.axis_phi.position()
                 theta_deg = self.axis_theta_cfg.counts_to_deg(theta_counts)
                 phi_deg = self.axis_phi_cfg.counts_to_deg(phi_counts)
+                theta_kdeg = theta_deg - self.axis_theta_cfg.home_offset_deg
+                phi_kdeg = phi_deg - self.axis_phi_cfg.home_offset_deg
                 x, y, z = self.kin.forward_kinematics(
-                    math.radians(theta_deg), math.radians(phi_deg)
+                    math.radians(theta_kdeg), math.radians(phi_kdeg)
                 )
                 # busy = any axis still moving
                 busy = not (self.axis_theta.target_reached() and self.axis_phi.target_reached())
