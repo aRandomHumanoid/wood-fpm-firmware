@@ -17,5 +17,5 @@ Maxon PN 860454
 
 Probe: 
 CNC 3D Touch Probe Edge Finder
-    - NPN-NO
+    - NPN-NC
     - Connected to Pi GPIO pins

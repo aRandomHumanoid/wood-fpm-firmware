@@ -28,7 +28,13 @@ class ProbeMonitor:
             if not self._pi.connected:
                 raise RuntimeError("pigpiod not running")
             self._pi.set_mode(gpio_pin, pigpio.INPUT)
-            self._pi.set_pull_up_down(gpio_pin, pigpio.PUD_UP if active_low else pigpio.PUD_DOWN)
+            # NPN sensor (per system-setup.txt): the transistor only ever
+            # sinks the line, never sources it, so we always need a pull-UP
+            # for the open state to read HIGH. This is correct for both
+            # NPN-NO (idle HIGH, contact LOW) and NPN-NC (idle LOW, contact
+            # HIGH). The contact-vs-level mapping is then expressed entirely
+            # through `active_low`.
+            self._pi.set_pull_up_down(gpio_pin, pigpio.PUD_UP)
             self._pi.set_glitch_filter(gpio_pin, debounce_us)
             self._cb = self._pi.callback(
                 gpio_pin,

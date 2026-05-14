@@ -103,7 +103,15 @@ axes:
 
 probe:
   gpio_pin: 17       # BCM numbering
-  active_low: true   # NPN-NO: input pulled high, goes low on contact
+  # NPN-NC probe: idle = switch closed, NPN conducts and sinks the GPIO to
+  # GND, so the line reads LOW at rest. On contact the switch opens, the
+  # NPN cuts off, and the Pi's internal pull-up pulls the line HIGH. So
+  # contact == HIGH → active_low: false.
+  # The pull resistor must be PUD_UP regardless of NO/NC for an NPN sensor;
+  # see probe.py. A disconnected probe cable will read HIGH (≡ "triggered"),
+  # which is the fail-safe behavior: scans refuse to start with a missing
+  # cable rather than driving blindly.
+  active_low: false
   debounce_us: 200
 
 network:
