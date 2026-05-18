@@ -21,9 +21,9 @@ machine:
 
 kinematics:
   # PPM parameters (Triangular-Bipyramid Lc/H/D/G form). TBD — measure on hardware.
-  Lc: 100.0
-  H:  20.0
-  D:  15.0
+  Lc: 50.0
+  H:  10.0
+  D:  7.50
   G:  60.0          # degrees
   theta_max_deg: 25 # joint-angle envelope; soft limit before motor commands
 
