@@ -65,6 +65,7 @@ class MotionController:
         marlin_port: str = "/dev/ttyUSB0",
         marlin_baudrate: int = 115200,
         simulate: bool = False,
+        auto_connect: bool = True,
         rapid_feed_mm_s: float = 15.0,
         scan_feed_mm_s: float = 2.0,
         x_axis: str = "X",
@@ -103,15 +104,16 @@ class MotionController:
         self._last_counts: Optional[Dict[str, int]] = None
         self._stable_count_polls = 0
 
-        try:
-            self._connect_driver(
-                marlin_port=marlin_port,
-                marlin_baudrate=marlin_baudrate,
-                simulate=simulate,
-            )
-        except MarlinError as e:
-            log.warning("initial Marlin connect failed: %s", e)
-            self._set_state(fault=True, last_error=str(e), serial_connected=False)
+        if auto_connect:
+            try:
+                self._connect_driver(
+                    marlin_port=marlin_port,
+                    marlin_baudrate=marlin_baudrate,
+                    simulate=simulate,
+                )
+            except MarlinError as e:
+                log.warning("initial Marlin connect failed: %s", e)
+                self._set_state(fault=True, last_error=str(e), serial_connected=False)
 
     # -------- listeners / state --------
 
@@ -194,7 +196,7 @@ class MotionController:
             self._busy_flag = False
             self._last_counts = None
             self._stable_count_polls = 0
-            self._set_state(busy=False, serial_connected=False)
+            self._set_state(busy=False, homed=False, serial_connected=False)
             self._broadcast_serial("meta", f"disconnected from {self._marlin_port}")
             self._broadcast()
             return self.serial_status()
@@ -208,6 +210,7 @@ class MotionController:
         )
         try:
             new_marlin.set_absolute_mode()   # G90 — workspace coords from here on
+            position = new_marlin.position()
         except Exception:
             try:
                 new_marlin.close()
@@ -220,7 +223,15 @@ class MotionController:
         self._simulate = simulate
         self._marlin_port = marlin_port
         self._marlin_baudrate = marlin_baudrate
-        self._set_state(serial_connected=True, fault=False)
+        self._set_state(
+            x=position.logical.get(self._x_letter, self.state.x),
+            y=position.logical.get(self._y_letter, self.state.y),
+            z=position.logical.get(self._z_letter, self.state.z),
+            busy=False,
+            homed=False,
+            serial_connected=True,
+            fault=False,
+        )
         if simulate:
             self._broadcast_serial("meta", "connected in simulation mode")
         else:
@@ -251,6 +262,12 @@ class MotionController:
 
     def _feedrate_mm_min(self) -> float:
         return max(self._feed_mm_s * 60.0, 1.0)
+
+    def _clear_pending_motion(self):
+        self._target = None
+        self._busy_flag = False
+        self._last_counts = None
+        self._stable_count_polls = 0
 
     # -------- public ops --------
 
@@ -290,7 +307,8 @@ class MotionController:
                 if wait:
                     self._wait_for_idle(timeout_s=timeout_s)
             except MarlinError as e:
-                self._set_state(fault=True, last_error=str(e))
+                self._clear_pending_motion()
+                self._set_state(busy=False, fault=True, last_error=str(e))
                 raise
             finally:
                 if wait:
@@ -302,7 +320,33 @@ class MotionController:
         pos = self._require_marlin().position()
         x = pos.logical.get(self._x_letter, self.state.x)
         y = pos.logical.get(self._y_letter, self.state.y)
-        self.move_to(x + dx, y + dy, **kwargs)
+        if self.state.homed:
+            self.move_to(x + dx, y + dy, **kwargs)
+            return
+
+        wait = kwargs.pop("wait", True)
+        timeout_s = kwargs.pop("timeout_s", 60.0)
+        with self._action_lock:
+            marlin = self._require_marlin()
+            move_axes = {self._x_letter: dx, self._y_letter: dy}
+            self._target = {self._x_letter: x + dx, self._y_letter: y + dy}
+            self._busy_flag = True
+            self._last_counts = None
+            self._stable_count_polls = 0
+            self._set_state(busy=True, last_error="")
+            self._broadcast()
+            try:
+                marlin.move_relative(move_axes, feedrate_mm_min=self._feedrate_mm_min())
+                if wait:
+                    self._wait_for_idle(timeout_s=timeout_s)
+            except MarlinError as e:
+                self._clear_pending_motion()
+                self._set_state(busy=False, fault=True, last_error=str(e))
+                raise
+            finally:
+                if wait:
+                    self._set_state(busy=False)
+                self._broadcast()
 
     def probe_to_x(self, target_x: float, y: float, timeout_s: float = 120.0) -> bool:
         """Probe toward ``target_x`` with a blocking G38.2 move.
@@ -318,12 +362,19 @@ class MotionController:
             self._set_state(busy=True, last_error="")
             self._broadcast()
             try:
-                marlin.probe_target(
+                probe_pos = marlin.probe_target(
                     {self._x_letter: target_x, self._y_letter: y},
                     feedrate_mm_min=self._feedrate_mm_min(),
                     timeout_s=timeout_s,
                 )
-                self._refresh_position()
+                if probe_pos:
+                    self._set_state(
+                        x=probe_pos.get(self._x_letter, self.state.x),
+                        y=probe_pos.get(self._y_letter, self.state.y),
+                        z=probe_pos.get(self._z_letter, self.state.z),
+                    )
+                else:
+                    self._refresh_position()
                 return True
             except MarlinError as e:
                 self._refresh_position()
@@ -381,6 +432,31 @@ class MotionController:
         self._broadcast_serial("meta", "E-STOP latched")
         self._broadcast()
 
+    def _clear_fault_latch(self, transcript_line: str):
+        self._target = None
+        self._busy_flag = False
+        self._last_counts = None
+        self._stable_count_polls = 0
+        self._set_state(busy=False, fault=False, last_error="")
+        self._broadcast_serial("meta", transcript_line)
+
+    def clear_fault(self) -> bool:
+        """Clear the local fault or busy latch without reconnecting serial."""
+        with self._action_lock:
+            with self._state_lock:
+                clearable = (
+                    self.state.busy
+                    or self.state.fault
+                    or bool(self.state.last_error)
+                    or self._busy_flag
+                    or self._target is not None
+                )
+            if not clearable:
+                return False
+            self._clear_fault_latch("Fault cleared")
+        self._broadcast()
+        return True
+
     def reset_estop(self) -> bool:
         """Clear the local E-STOP latch without reconnecting serial."""
         with self._action_lock:
@@ -388,12 +464,7 @@ class MotionController:
                 estop_latched = self.state.last_error == "E-STOP"
             if not estop_latched:
                 return False
-            self._target = None
-            self._busy_flag = False
-            self._last_counts = None
-            self._stable_count_polls = 0
-            self._set_state(busy=False, fault=False, last_error="")
-            self._broadcast_serial("meta", "E-STOP reset")
+            self._clear_fault_latch("E-STOP reset")
         self._broadcast()
         return True
 

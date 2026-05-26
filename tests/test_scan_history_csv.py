@@ -45,7 +45,15 @@ def test_scan_history_csv_routes_and_append(tmp_path):
     )
     scan = app.config["scan"]
 
-    req = ScanRequest(x_max=8.0, y_max=5.0, y_min=-5.0, n_samples=3, scan_id="scan1234")
+    req = ScanRequest(
+        x_max=8.0,
+        probe_target_x=-2.0,
+        y_max=5.0,
+        y_min=-5.0,
+        n_samples=3,
+        probe_speed_mm_s=3.5,
+        scan_id="scan1234",
+    )
     pt = ScanPoint(scan_id="scan1234", index=1, x=2.5, y=1.0)
 
     scan.on_started(req)
@@ -58,13 +66,13 @@ def test_scan_history_csv_routes_and_append(tmp_path):
         assert response.status_code == 200
         assert response.mimetype == "text/csv"
         assert "scan_id,index,hit,x,y" in body
-        assert "scan1234,1,True,2.500000,1.000000,8.000000,0.000000,-5.000000,5.000000,3" in body
+        assert "scan1234,1,True,2.500000,1.000000,8.000000,-2.000000,3.500000,-5.000000,5.000000,3" in body
 
         clear = client.post("/api/scan/history/clear")
         cleared = client.get("/api/scan/history.csv")
         assert clear.status_code == 200
         assert cleared.get_data(as_text=True).strip() == (
-            "recorded_at_utc,scan_id,index,hit,x,y,x_max,probe_target_x,y_min,y_max,n_samples"
+            "recorded_at_utc,scan_id,index,hit,x,y,x_max,probe_target_x,probe_speed_mm_s,y_min,y_max,n_samples"
         )
 
 

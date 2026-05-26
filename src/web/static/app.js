@@ -9,6 +9,9 @@ let serialConnected = false;
 let serialSimulate = false;
 let serialConsoleLoaded = false;
 let serialConsoleEntries = [];
+let controllerBusy = false;
+let jogRequestPending = false;
+let jogRequestObservedBusy = false;
 
 const $ = (id) => document.getElementById(id);
 const setVal = (id, v, digits = 2) => {
@@ -22,6 +25,22 @@ const setLed = (id, on, warn = false) => {
   el.classList.toggle("warn", !!warn);
 };
 
+function updateJogMode(homed) {
+  const el = $("jog-mode");
+  if (!el) return;
+  el.textContent = homed
+    ? "Mode: absolute workspace (homed)"
+    : "Mode: relative (unhomed)";
+  el.classList.toggle("homed", !!homed);
+}
+
+function updateJogControls() {
+  const disabled = controllerBusy || jogRequestPending;
+  document.querySelectorAll(".jog").forEach((button) => {
+    button.disabled = disabled;
+  });
+}
+
 // ---------- live state ----------
 socket.on("state", (s) => {
   setVal("pos-x", s.x);
@@ -29,6 +48,16 @@ socket.on("state", (s) => {
   setVal("pos-z", s.z);
   setLed("probe-led", s.probe, false);
   setLed("homed-led", s.homed, false);
+  updateJogMode(s.homed);
+  controllerBusy = !!s.busy;
+  if (jogRequestPending && controllerBusy) {
+    jogRequestObservedBusy = true;
+  }
+  if (jogRequestPending && jogRequestObservedBusy && !controllerBusy) {
+    jogRequestPending = false;
+    jogRequestObservedBusy = false;
+  }
+  updateJogControls();
   setLed("busy-led",  s.busy,  false);
   setLed("fault-led", s.fault, s.fault);
   if (typeof s.serial_connected === "boolean") {
@@ -36,6 +65,7 @@ socket.on("state", (s) => {
     updateSerialPanel();
   }
   $("estop-reset").disabled = s.last_error !== "E-STOP";
+  $("fault-clear").disabled = !(s.busy || s.fault || s.last_error);
   $("last-error").textContent = s.last_error || "";
 });
 
@@ -45,6 +75,7 @@ fetch("/api/limits").then(r => r.json()).then((L) => {
   $("lim-y").textContent = `${L.bounds.y_min} … ${L.bounds.y_max}`;
   setVal("lim-v", L.v_max_mm_s);
   setVal("lim-a", L.a_max_mm_s2);
+  $("s-probe-speed").value = L.scan_feed_mm_s;
 });
 
 // ---------- jog / home / e-stop ----------
@@ -55,6 +86,10 @@ async function post(url, body) {
     body: body ? JSON.stringify(body) : "{}",
   });
   return res.json();
+}
+
+function showActionError(result, fallbackMessage) {
+  $("last-error").textContent = result?.error || fallbackMessage;
 }
 
 function setSelectOptions(id, options, selectedValue) {
@@ -158,17 +193,50 @@ async function refreshSerialConsole() {
 }
 
 document.querySelectorAll(".jog").forEach((b) => {
-  b.addEventListener("click", () => {
+  b.addEventListener("click", async () => {
+    if (controllerBusy || jogRequestPending) {
+      return;
+    }
+    jogRequestPending = true;
+    jogRequestObservedBusy = false;
+    updateJogControls();
     const step = parseFloat($("jog-step").value) || 0;
     const dx = parseFloat(b.dataset.dx) * step;
     const dy = parseFloat(b.dataset.dy) * step;
-    post("/api/jog", { dx, dy });
+    const result = await post("/api/jog", { dx, dy });
+    if (!result.ok) {
+      jogRequestPending = false;
+      jogRequestObservedBusy = false;
+      updateJogControls();
+      showActionError(result, "jog failed");
+    }
   });
 });
 
-$("home").addEventListener("click", () => post("/api/home"));
-$("estop").addEventListener("click", () => post("/api/stop"));
-$("estop-reset").addEventListener("click", () => post("/api/stop/reset"));
+$("home").addEventListener("click", async () => {
+  const result = await post("/api/home");
+  if (!result.ok) {
+    showActionError(result, "home failed");
+  }
+});
+$("estop").addEventListener("click", async () => {
+  const result = await post("/api/stop");
+  if (!result.ok) {
+    showActionError(result, "E-STOP failed");
+  }
+});
+$("estop-reset").addEventListener("click", async () => {
+  const result = await post("/api/stop/reset");
+  if (!result.ok) {
+    showActionError(result, "E-STOP reset failed");
+  }
+});
+$("fault-clear").addEventListener("click", async () => {
+  const result = await post("/api/fault/clear");
+  if (!result.ok) {
+    showActionError(result, "clear fault failed");
+  }
+});
 $("serial-toggle").addEventListener("click", async () => {
   const url = serialConnected ? "/api/serial/disconnect" : "/api/serial/connect";
   const body = serialConnected ? null : {
@@ -302,6 +370,8 @@ socket.on("scan_complete", () => { void renderPlotFromCsv(); });
 $("run-scan").addEventListener("click", async () => {
   const body = {
     x_max: +$("s-xmax").value,
+    probe_target_x: +$("s-probe-x").value,
+    probe_speed_mm_s: +$("s-probe-speed").value,
     y_max: +$("s-ymax").value,
     y_min: +$("s-ymin").value,
     n_samples: +$("s-n").value,

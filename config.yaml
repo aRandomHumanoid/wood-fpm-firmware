@@ -11,10 +11,10 @@ machine:
   # Set Marlin's MIN_POS / MAX_POS to match (or wider) so Marlin and the
   # firmware agree on what's reachable.
   bounds:
-    x_min: -30.0
-    x_max:  30.0
-    y_min: -30.0
-    y_max:  30.0
+    x_min: -50.0
+    x_max:  50.0
+    y_min: -50.0
+    y_max:  50.0
   v_max_mm_s:   20.0   # TBD: max workspace feedrate
   a_max_mm_s2: 100.0   # TBD: max workspace acceleration
   jog_step_mm:  1.0    # default UI jog increment
@@ -22,9 +22,8 @@ machine:
   rapid_feed_mm_s: 15.0
 
 marlin:
-  # Serial connection to the Marlin board.
-  port: /dev/ttyACM0   # often /dev/ttyACM0 on USB-CDC boards; /dev/ttyUSB0 on FTDI/CH340
-  baudrate: 250000     # match Marlin's BAUDRATE
+  # The web UI chooses the serial port and baudrate at connect time.
+  # Leave only axis mapping here unless you want CLI-side defaults.
   # Marlin axis letters that map to workspace X / Y / Z. Defaults match a
   # standard Marlin configuration. Change here only if your Marlin firmware
   # reports the workspace axes under different letters.
@@ -54,5 +53,6 @@ network:
 
 driver:
   # Set to true to run without hardware (simulated Marlin board + simulated
-  # probe). Useful for UI development on a non-Pi machine.
+  # probe). Useful for UI development on a non-Pi machine. With false, the
+  # web app starts disconnected and the Serial panel is used to connect.
   simulate: false

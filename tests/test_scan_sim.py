@@ -26,12 +26,14 @@ class FakeMotion:
         self.rapid_feed_mm_s = 15.0
         self.scan_feed_mm_s = 2.0
         self.limits = MotionLimits(v_max_mm_s=20, a_max_mm_s2=100)
+        self.feed_history = []
+        self.halt_calls = 0
 
     def set_feed_mm_s(self, v):
-        pass
+        self.feed_history.append(v)
 
     def halt(self):
-        pass
+        self.halt_calls += 1
 
     def move_to(self, x, y, wait=True, **_):
         self.state.x = x
@@ -63,7 +65,7 @@ def test_scan_traces_known_contour():
     runner.on_point = lambda pt: received.append(pt)
     runner.on_complete = lambda sid: done.set()
 
-    req = ScanRequest(x_max=10, y_max=10, y_min=-10, n_samples=5, scan_id="t1")
+    req = ScanRequest(x_max=10, probe_target_x=0, y_max=10, y_min=-10, n_samples=5, scan_id="t1")
 
     runner.start(req)
     assert started.wait(timeout=2.0)
@@ -88,13 +90,13 @@ def test_scan_records_no_contact_when_surface_absent():
     runner.on_point = lambda p: pts.append(p)
     runner.on_complete = lambda _sid: done.set()
 
-    runner.start(ScanRequest(x_max=4, y_max=5, y_min=-5, n_samples=3, scan_id="t2"))
+    runner.start(ScanRequest(x_max=4, probe_target_x=0, y_max=5, y_min=-5, n_samples=3, scan_id="t2"))
     assert done.wait(timeout=20.0)
     assert len(pts) == 3
     assert all(p.x is None for p in pts)
 
 
-def test_scan_always_probes_toward_zero():
+def test_scan_uses_requested_probe_target_x():
     def contour(_y):
         return -1.0
 
@@ -105,8 +107,39 @@ def test_scan_always_probes_toward_zero():
     runner.on_point = lambda p: pts.append(p)
     runner.on_complete = lambda _sid: done.set()
 
-    runner.start(ScanRequest(x_max=4, y_max=5, y_min=-5, n_samples=3, scan_id="t3"))
+    runner.start(ScanRequest(x_max=4, probe_target_x=-2, y_max=5, y_min=-5, n_samples=3, scan_id="t3"))
     assert done.wait(timeout=20.0)
     assert len(pts) == 3
-    assert all(p.x is None for p in pts)
+    assert all(p.x == -1.0 for p in pts)
+
+
+def test_scan_uses_requested_probe_speed():
+    motion = FakeMotion(lambda _y: 1.0)
+    runner = ScanRunner(motion, object())
+    done = threading.Event()
+    runner.on_complete = lambda _sid: done.set()
+
+    runner.start(
+        ScanRequest(
+            x_max=4,
+            probe_target_x=0,
+            y_max=5,
+            y_min=-5,
+            n_samples=2,
+            probe_speed_mm_s=3.5,
+            scan_id="t4",
+        )
+    )
+    assert done.wait(timeout=20.0)
+    assert 3.5 in motion.feed_history
+
+
+def test_scan_abort_does_not_halt_motion():
+    motion = FakeMotion(lambda _y: 1.0)
+    runner = ScanRunner(motion, object())
+
+    runner.abort()
+
+    assert runner._abort.is_set() is True  # noqa: SLF001
+    assert motion.halt_calls == 0
 

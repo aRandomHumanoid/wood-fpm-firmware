@@ -83,6 +83,18 @@ def parse_m114(lines: List[str]) -> Position:
     return Position(logical=logical, counts=counts)
 
 
+def parse_probe_position(lines: List[str]) -> Dict[str, float]:
+    """Parse axis coordinates reported by a successful G38 probe reply."""
+    logical: Dict[str, float] = {}
+    for line in lines:
+        head = line.split("Count", 1)[0]
+        for axis, val in _LOGICAL_RE.findall(head):
+            if axis == "E":
+                continue
+            logical.setdefault(axis, float(val))
+    return logical
+
+
 class MarlinDriver:
     """One serial connection to one Marlin board.
 
@@ -102,7 +114,7 @@ class MarlinDriver:
     ):
         import serial  # imported lazily so the package can install without pyserial on dev hosts
         self._serial = serial.Serial(port, baudrate, timeout=read_timeout_s)
-        self._cmd_q: "queue.Queue[tuple[str, queue.Queue[list[str] | MarlinError]]]" = queue.Queue()
+        self._cmd_q: "queue.Queue[tuple[str, float, queue.Queue[list[str] | MarlinError]]]" = queue.Queue()
         self._running = True
         self._transcript_hook = transcript_hook
         self._io_thread = threading.Thread(target=self._io_loop, daemon=True, name="marlin-io")
@@ -143,28 +155,33 @@ class MarlinDriver:
     def _io_loop(self):
         while self._running:
             try:
-                cmd, reply_q = self._cmd_q.get(timeout=0.5)
+                cmd, timeout_s, reply_q = self._cmd_q.get(timeout=0.5)
             except queue.Empty:
                 continue
             try:
                 self._emit_transcript("tx", cmd.strip())
                 self._serial.write((cmd.strip() + "\n").encode())
                 self._serial.flush()
-                lines = self._read_until_ok()
+                lines = self._read_until_ok(timeout_s)
                 reply_q.put(lines)
             except Exception as e:
                 reply_q.put(MarlinError(str(e)))
 
     def _read_until_ok(self, overall_timeout_s: float = 30.0) -> List[str]:
-        deadline = time.monotonic() + overall_timeout_s
+        overall_deadline = time.monotonic() + overall_timeout_s
+        idle_deadline = overall_deadline
         lines: List[str] = []
-        while time.monotonic() < deadline:
+        while True:
+            now = time.monotonic()
+            if now >= overall_deadline or now >= idle_deadline:
+                break
             raw = self._serial.readline()
             if not raw:
                 continue  # readline timed out, keep waiting
             line = raw.decode(errors="replace").strip()
             if not line:
                 continue
+            idle_deadline = min(overall_deadline, time.monotonic() + overall_timeout_s)
             self._emit_transcript("rx", line)
             lines.append(line)
             low = line.lower()
@@ -177,13 +194,25 @@ class MarlinDriver:
     # ----- public API -----
 
     def send(self, cmd: str, timeout_s: float = 30.0) -> List[str]:
-        """Send a single G-code line, block until ``ok`` (or raise)."""
+        """Send a single G-code line, block until ``ok`` (or raise).
+
+        ``timeout_s`` is treated as an inactivity timeout: any line Marlin
+        sends back, including ``echo:busy: processing``, keeps the command
+        alive, but the command still has the same total timeout budget.
+        """
         reply_q: "queue.Queue[list[str] | MarlinError]" = queue.Queue()
-        self._cmd_q.put((cmd, reply_q))
-        try:
-            result = reply_q.get(timeout=timeout_s)
-        except queue.Empty:
-            raise MarlinError(f"send timeout: {cmd}")
+        self._cmd_q.put((cmd, timeout_s, reply_q))
+        deadline = time.monotonic() + timeout_s
+        while True:
+            try:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise MarlinError(f"send timeout: {cmd}")
+                result = reply_q.get(timeout=min(1.0, remaining))
+                break
+            except queue.Empty:
+                if not self._io_thread.is_alive():
+                    raise MarlinError(f"send failed: marlin I/O thread stopped while waiting for {cmd}")
         if isinstance(result, MarlinError):
             raise result
         return result
@@ -200,6 +229,17 @@ class MarlinDriver:
             parts.append(f"F{feedrate_mm_min:.1f}")
         self.send("G1 " + " ".join(parts))
 
+    def move_relative(self, axes: Dict[str, float], feedrate_mm_min: Optional[float] = None):
+        """Issue a G1 move in relative mode and restore absolute mode after."""
+        parts = [f"{k}{v:.4f}" for k, v in axes.items()]
+        if feedrate_mm_min is not None:
+            parts.append(f"F{feedrate_mm_min:.1f}")
+        self.send("G91")
+        try:
+            self.send("G1 " + " ".join(parts))
+        finally:
+            self.send("G90")
+
     def probe_target(
         self,
         axes: Dict[str, float],
@@ -210,7 +250,8 @@ class MarlinDriver:
         parts = [f"{k}{v:.4f}" for k, v in axes.items()]
         if feedrate_mm_min is not None:
             parts.append(f"F{feedrate_mm_min:.1f}")
-        self.send("G38.2 " + " ".join(parts), timeout_s=timeout_s)
+        lines = self.send("G38.2 " + " ".join(parts), timeout_s=timeout_s)
+        return parse_probe_position(lines)
 
     def home(self, axes: str = "X Y"):
         """Block until G28 reports ``ok`` (Marlin doesn't ack until done)."""
@@ -272,6 +313,7 @@ class SimulatedMarlinDriver:
         self._start_pos: Dict[str, float] = {a: 0.0 for a in self.AXES}
         self._feedrate_mm_min: float = 600.0   # 10 mm/s default
         self._homed = False
+        self._relative_mode = False
         self._probe_surface_x = probe_surface_x
         self._transcript_hook = transcript_hook
 
@@ -298,6 +340,10 @@ class SimulatedMarlinDriver:
                 self._emit_transcript("rx", line)
             return lines
         if tok in ("M84", "M410", "M201", "M203", "M205", "M220", "G90", "G91"):
+            if tok == "G90":
+                self._relative_mode = False
+            if tok == "G91":
+                self._relative_mode = True
             if tok == "M410":
                 self._tick()
                 self._target = dict(self._pos)
@@ -341,6 +387,16 @@ class SimulatedMarlinDriver:
             parts.append(f"F{feedrate_mm_min}")
         self.send("G1 " + " ".join(parts))
 
+    def move_relative(self, axes: Dict[str, float], feedrate_mm_min: Optional[float] = None):
+        parts = [f"{k}{v}" for k, v in axes.items()]
+        if feedrate_mm_min is not None:
+            parts.append(f"F{feedrate_mm_min}")
+        self.send("G91")
+        try:
+            self.send("G1 " + " ".join(parts))
+        finally:
+            self.send("G90")
+
     def probe_target(
         self,
         axes: Dict[str, float],
@@ -370,9 +426,11 @@ class SimulatedMarlinDriver:
             self._pos["X"] = final_x
             self._pos["Y"] = target_y
             self._move_end = self._move_start = 0.0
+            result = {"X": final_x, "Y": target_y, "Z": self._pos["Z"]}
 
         if contact_x is None:
             raise MarlinError("G38.2 target reached without probe trigger")
+        return result
 
     def home(self, axes: str = "X Y"):
         self.send("G28 " + axes)
@@ -410,7 +468,10 @@ class SimulatedMarlinDriver:
         with self._lock:
             self._start_pos = dict(self._pos)
             for a, v in targets.items():
-                self._target[a] = v
+                if self._relative_mode:
+                    self._target[a] = self._start_pos[a] + v
+                else:
+                    self._target[a] = v
             # Distance and duration estimate.
             d2 = sum((self._target[a] - self._start_pos[a]) ** 2 for a in targets)
             distance = d2 ** 0.5

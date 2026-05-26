@@ -49,8 +49,8 @@ A few Marlin firmware settings need to line up with this Pi-side firmware:
 - **`EMERGENCY_PARSER`** strongly recommended so M114, M112, M410 are
   processed even while moves are queued — the Pi polls M114 at 5 Hz for
   live state.
-- Set the right **`BAUDRATE`** and confirm `marlin.baudrate` in
-  `config.yaml` matches.
+- Set the right **`BAUDRATE`** in Marlin and choose the matching baudrate in
+  the web UI's Serial panel when you connect.
 - If your Marlin build reports the workspace axes under non-standard
   letters, override `marlin.x_axis` / `y_axis` / `z_axis` in `config.yaml`.
 
@@ -61,6 +61,9 @@ python3 run.py --config config.yaml
 ```
 
 Visit `http://<pi-ip>:5000`.
+
+With `driver.simulate: false`, the web app starts disconnected on purpose;
+pick the serial port and baudrate in the Serial panel and connect from the UI.
 
 For UI development without hardware, set `driver.simulate: true` in
 `config.yaml` and run on any machine — a `SimulatedMarlinDriver` will
@@ -167,8 +170,9 @@ input, used only for live UI state. Falls back to a software-only
 simulator when `pigpiod` is unavailable.
 
 **[`src/core/scan.py`](src/core/scan.py)**
-`ScanRunner`: for each Y sample, rapid to `x_max`, run `G38.2 X0`, record
-the contact X on success, retract, advance.
+`ScanRunner`: for each Y sample, rapid to `x_max`, run `G38.2` toward the
+requested `probe_target_x`, record the contact X on success, retract,
+advance.
 Emits `scan_started` / `scan_point` / `scan_complete`.
 
 **[`src/drivers/marlin.py`](src/drivers/marlin.py)**
@@ -203,7 +207,7 @@ path (Marlin does the kinematics) but kept as a reference / test fixture.
 |--------|---------------------|-------------------------------------------------------------------|-------|
 | POST   | `/api/home`         | —                                                                 | Marlin G28 on both axes |
 | POST   | `/api/jog`          | `{dx, dy}` *or* `{x, y}`                                          | Bounded by workspace, returns 400 if out of range |
-| POST   | `/api/scan`         | `{x_max, y_max, y_min, n_samples}`                                | Sweeps Y across `[y_min, y_max]`, moves to `x_max`, then probes with `G38.2 X0` |
+| POST   | `/api/scan`         | `{x_max, probe_target_x, y_max, y_min, n_samples}`                | Sweeps Y across `[y_min, y_max]`, moves to `x_max`, then probes with `G38.2 X<probe_target_x>` |
 | POST   | `/api/scan/abort`   | —                                                                 | Cancels in-flight scan |
 | GET    | `/api/scan/history.csv` | —                                                             | Returns the persisted probe history CSV used by the plot |
 | POST   | `/api/scan/history/clear` | —                                                          | Clears the persisted probe history CSV when no scan is running |

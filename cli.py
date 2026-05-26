@@ -39,7 +39,7 @@ def build_motion(cfg: dict) -> MotionController:
     return MotionController(
         bounds=bounds, limits=limits,
         marlin_port=marlin_cfg.get("port", "/dev/ttyUSB0"),
-        marlin_baudrate=marlin_cfg.get("baudrate", 115200),
+        marlin_baudrate=marlin_cfg.get("baudrate", 250000),
         x_axis=marlin_cfg.get("x_axis", "X"),
         y_axis=marlin_cfg.get("y_axis", "Y"),
         z_axis=marlin_cfg.get("z_axis", "Z"),

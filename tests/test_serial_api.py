@@ -1,3 +1,5 @@
+import threading
+
 import src.web.app as web_app
 
 from src.core.limits import MachineBounds, MotionLimits
@@ -184,5 +186,187 @@ def test_estop_can_be_reset(tmp_path):
 
             reset_again = client.post("/api/stop/reset")
             assert reset_again.get_json()["reset"] is False
+    finally:
+        motion.shutdown()
+
+
+def test_fault_can_be_cleared(tmp_path):
+    motion = build_motion()
+    try:
+        app, _socketio = create_app(
+            motion=motion,
+            probe=FakeProbe(),
+            scan=FakeScan(),
+            scan_history_path=tmp_path / "scan_history.csv",
+        )
+
+        motion._target = (5.0, 0.0)  # noqa: SLF001
+        motion._busy_flag = True  # noqa: SLF001
+        motion._last_counts = (1, 2, 3)  # noqa: SLF001
+        motion._stable_count_polls = 2  # noqa: SLF001
+        motion._set_state(busy=True, fault=True, last_error="timeout waiting for move to complete")  # noqa: SLF001
+
+        with app.test_client() as client:
+            cleared = client.post("/api/fault/clear")
+            payload = cleared.get_json()
+            assert cleared.status_code == 200
+            assert payload["ok"] is True
+            assert payload["cleared"] is True
+            assert motion.state.busy is False
+            assert motion.state.fault is False
+            assert motion.state.last_error == ""
+            assert motion._target is None  # noqa: SLF001
+            assert motion._busy_flag is False  # noqa: SLF001
+            assert motion._last_counts is None  # noqa: SLF001
+            assert motion._stable_count_polls == 0  # noqa: SLF001
+
+            cleared_again = client.post("/api/fault/clear")
+            assert cleared_again.get_json()["cleared"] is False
+    finally:
+        motion.shutdown()
+
+
+def test_busy_without_fault_can_be_cleared(tmp_path):
+    motion = build_motion()
+    try:
+        app, _socketio = create_app(
+            motion=motion,
+            probe=FakeProbe(),
+            scan=FakeScan(),
+            scan_history_path=tmp_path / "scan_history.csv",
+        )
+
+        motion._target = {motion._x_letter: 5.0, motion._y_letter: 0.0}  # noqa: SLF001
+        motion._busy_flag = True  # noqa: SLF001
+        motion._last_counts = {motion._x_letter: 100}  # noqa: SLF001
+        motion._stable_count_polls = 1  # noqa: SLF001
+        motion._set_state(busy=True, fault=False, last_error="")  # noqa: SLF001
+
+        with app.test_client() as client:
+            cleared = client.post("/api/fault/clear")
+            payload = cleared.get_json()
+            assert cleared.status_code == 200
+            assert payload["ok"] is True
+            assert payload["cleared"] is True
+            assert motion.state.busy is False
+            assert motion.state.fault is False
+            assert motion.state.last_error == ""
+            assert motion._target is None  # noqa: SLF001
+            assert motion._busy_flag is False  # noqa: SLF001
+            assert motion._last_counts is None  # noqa: SLF001
+            assert motion._stable_count_polls == 0  # noqa: SLF001
+    finally:
+        motion.shutdown()
+
+
+def test_jog_reports_current_position_outside_workspace(tmp_path):
+    motion = build_motion()
+    try:
+        app, _socketio = create_app(
+            motion=motion,
+            probe=FakeProbe(),
+            scan=FakeScan(),
+            scan_history_path=tmp_path / "scan_history.csv",
+        )
+
+        motion._set_state(x=12.0, y=0.0, homed=True)  # noqa: SLF001
+
+        with app.test_client() as client:
+            jog = client.post("/api/jog", json={"dx": -1.0, "dy": 0.0})
+            payload = jog.get_json()
+            assert jog.status_code == 400
+            assert "current position (12.000, 0.000) is outside workspace" in payload["error"]
+            assert "config.yaml" in payload["error"]
+    finally:
+        motion.shutdown()
+
+
+def test_unhomed_jog_skips_absolute_workspace_precheck(tmp_path, monkeypatch):
+    motion = build_motion()
+    try:
+        app, _socketio = create_app(
+            motion=motion,
+            probe=FakeProbe(),
+            scan=FakeScan(),
+            scan_history_path=tmp_path / "scan_history.csv",
+        )
+
+        calls = []
+
+        class ImmediateThread:
+            def __init__(self, target=None, args=(), daemon=None, kwargs=None):
+                self._target = target
+                self._args = args
+                self._kwargs = kwargs or {}
+
+            def start(self):
+                if self._target is not None:
+                    self._target(*self._args, **self._kwargs)
+
+        monkeypatch.setattr(web_app.threading, "Thread", ImmediateThread)
+        monkeypatch.setattr(motion, "jog", lambda dx, dy: calls.append((dx, dy)))
+        motion._set_state(x=12.0, y=0.0, homed=False)  # noqa: SLF001
+
+        with app.test_client() as client:
+            jog = client.post("/api/jog", json={"dx": -1.0, "dy": 0.0})
+            payload = jog.get_json()
+            assert jog.status_code == 200
+            assert payload["ok"] is True
+            assert calls == [(-1.0, 0.0)]
+    finally:
+        motion.shutdown()
+
+
+def test_jog_rejects_when_controller_busy(tmp_path):
+    motion = build_motion()
+    try:
+        app, _socketio = create_app(
+            motion=motion,
+            probe=FakeProbe(),
+            scan=FakeScan(),
+            scan_history_path=tmp_path / "scan_history.csv",
+        )
+
+        motion._set_state(busy=True)  # noqa: SLF001
+
+        with app.test_client() as client:
+            jog = client.post("/api/jog", json={"dx": 1.0, "dy": 0.0})
+            assert jog.status_code == 409
+            assert jog.get_json()["error"] == "controller busy"
+    finally:
+        motion.shutdown()
+
+
+def test_jog_rejects_when_previous_jog_is_dispatching(tmp_path, monkeypatch):
+    motion = build_motion()
+    try:
+        app, _socketio = create_app(
+            motion=motion,
+            probe=FakeProbe(),
+            scan=FakeScan(),
+            scan_history_path=tmp_path / "scan_history.csv",
+        )
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_jog(dx, dy):
+            started.set()
+            assert (dx, dy) == (1.0, 0.0)
+            release.wait(timeout=2.0)
+
+        monkeypatch.setattr(motion, "jog", blocking_jog)
+        motion._set_state(homed=False)  # noqa: SLF001
+
+        with app.test_client() as client:
+            first = client.post("/api/jog", json={"dx": 1.0, "dy": 0.0})
+            assert first.status_code == 200
+            assert started.wait(timeout=1.0)
+
+            second = client.post("/api/jog", json={"dx": 1.0, "dy": 0.0})
+            assert second.status_code == 409
+            assert second.get_json()["error"] == "controller busy"
+
+            release.set()
     finally:
         motion.shutdown()

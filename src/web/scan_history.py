@@ -5,7 +5,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..core.scan import PROBE_TARGET_X, ScanPoint, ScanRequest
+from ..core.scan import ScanPoint, ScanRequest
 
 
 class ScanHistoryCsvStore:
@@ -18,6 +18,7 @@ class ScanHistoryCsvStore:
         "y",
         "x_max",
         "probe_target_x",
+        "probe_speed_mm_s",
         "y_min",
         "y_max",
         "n_samples",
@@ -37,7 +38,8 @@ class ScanHistoryCsvStore:
             "x": "" if pt.x is None else f"{pt.x:.6f}",
             "y": "" if pt.y is None else f"{pt.y:.6f}",
             "x_max": f"{req.x_max:.6f}",
-            "probe_target_x": f"{PROBE_TARGET_X:.6f}",
+            "probe_target_x": f"{req.probe_target_x:.6f}",
+            "probe_speed_mm_s": f"{req.probe_speed_mm_s:.6f}",
             "y_min": f"{req.y_min:.6f}",
             "y_max": f"{req.y_max:.6f}",
             "n_samples": req.n_samples,

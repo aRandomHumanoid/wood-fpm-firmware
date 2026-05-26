@@ -74,6 +74,15 @@ main {
 .led.warn { background: var(--bad); box-shadow: 0 0 6px var(--bad); }
 .err { margin-top: 8px; color: var(--bad); min-height: 1.2em; }
 
+.jog-mode {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.jog-mode.homed {
+  color: var(--accent);
+}
+
 .jog-pad {
   display: grid;
   gap: 6px;

@@ -2,9 +2,9 @@
 
 For each Y sample (evenly spaced across [y_min, y_max]):
     1. Rapid to (x_max, y).
-    2. Slow-feed probe toward x=0 with Marlin G38.2.
+    2. Probe at probe_speed_mm_s toward probe_target_x with Marlin G38.2.
     3. On probe trigger: record (current_x, y) as a contact point.
-         If x=0 is reached without contact: record (None, y).
+         If probe_target_x is reached without contact: record (None, y).
     4. Retract rapid to (x_max, y).
     5. Advance Y.
 Emits scan_started / scan_point / scan_complete via callbacks.
@@ -24,7 +24,7 @@ from .probe import ProbeMonitor
 
 log = logging.getLogger(__name__)
 
-PROBE_TARGET_X = 0.0
+DEFAULT_PROBE_TARGET_X = 0.0
 
 
 @dataclass
@@ -33,12 +33,12 @@ class ScanRequest:
     y_max: float
     y_min: float
     n_samples: int
+    probe_target_x: float = DEFAULT_PROBE_TARGET_X
+    probe_speed_mm_s: float = 2.0
     scan_id: str = ""
 
     def to_dict(self):
-        payload = asdict(self)
-        payload["probe_target_x"] = PROBE_TARGET_X
-        return payload
+        return asdict(self)
 
 
 @dataclass
@@ -82,7 +82,6 @@ class ScanRunner:
 
     def abort(self):
         self._abort.set()
-        self.motion.halt()
 
     def _run(self, req: ScanRequest):
         self._running = True
@@ -101,9 +100,9 @@ class ScanRunner:
                 if self._abort.is_set():
                     break
 
-                # 2. Probe toward X=0 with Marlin-native G38.2.
-                self.motion.set_feed_mm_s(self.motion.scan_feed_mm_s)
-                hit = self.motion.probe_to_x(PROBE_TARGET_X, float(y))
+                # 2. Probe toward the requested X target with Marlin-native G38.2.
+                self.motion.set_feed_mm_s(req.probe_speed_mm_s)
+                hit = self.motion.probe_to_x(req.probe_target_x, float(y))
                 contact_x = self.motion.state.x if hit else None
 
                 pt = ScanPoint(

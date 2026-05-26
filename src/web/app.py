@@ -4,7 +4,7 @@ Endpoints:
   GET  /             — single-page UI
   POST /api/home     — kick off homing on both axes
   POST /api/jog      — {dx, dy} or {x, y}
-    POST /api/scan     — {x_max, y_max, y_min, n_samples}
+    POST /api/scan     — {x_max, probe_target_x, probe_speed_mm_s, y_max, y_min, n_samples}
   POST /api/scan/abort
   POST /api/stop     — E-stop
     POST /api/stop/reset
@@ -32,7 +32,7 @@ from flask_socketio import SocketIO
 from ..core.limits import BoundsError
 from ..core.motion import MotionController
 from ..core.probe import ProbeMonitor
-from ..core.scan import PROBE_TARGET_X, ScanRequest, ScanRunner
+from ..core.scan import DEFAULT_PROBE_TARGET_X, ScanRequest, ScanRunner
 from ..drivers.marlin import MarlinError
 from .serial_console import SerialConsoleBuffer
 from .scan_history import ScanHistoryCsvStore
@@ -71,6 +71,22 @@ def create_app(
 
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
     active_scans: dict[str, ScanRequest] = {}
+    motion_dispatch_lock = threading.Lock()
+
+    def start_motion_task(target, *args) -> bool:
+        if not motion_dispatch_lock.acquire(blocking=False):
+            return False
+
+        def runner():
+            try:
+                target(*args)
+            except Exception:
+                log.exception("motion task")
+            finally:
+                motion_dispatch_lock.release()
+
+        threading.Thread(target=runner, daemon=True).start()
+        return True
 
     def serial_payload() -> Dict[str, object]:
         status = motion.serial_status()
@@ -185,7 +201,8 @@ def create_app(
     def post_home():
         if not motion.serial_status()["connected"]:
             return jsonify({"ok": False, "error": "serial not connected"}), 409
-        threading.Thread(target=motion.home_all, daemon=True).start()
+        if scan.running or motion.is_busy() or not start_motion_task(motion.home_all):
+            return jsonify({"ok": False, "error": "controller busy"}), 409
         return jsonify({"ok": True})
 
     @app.post("/api/jog")
@@ -194,23 +211,38 @@ def create_app(
         try:
             if not motion.serial_status()["connected"]:
                 return jsonify({"ok": False, "error": "serial not connected"}), 409
+            if scan.running or motion.is_busy():
+                return jsonify({"ok": False, "error": "controller busy"}), 409
             if "x" in data and "y" in data:
                 x, y = float(data["x"]), float(data["y"])
                 motion.bounds.check(x, y)
-                threading.Thread(
-                    target=motion.move_to, args=(x, y), daemon=True
-                ).start()
+                if not start_motion_task(motion.move_to, x, y):
+                    return jsonify({"ok": False, "error": "controller busy"}), 409
             else:
                 dx, dy = float(data.get("dx", 0)), float(data.get("dy", 0))
+                current_x = motion.state.x
+                current_y = motion.state.y
+                if motion.state.homed and not motion.bounds.contains(current_x, current_y):
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": (
+                                f"current position ({current_x:.3f}, {current_y:.3f}) is outside workspace "
+                                f"[{motion.bounds.x_min}, {motion.bounds.x_max}] x "
+                                f"[{motion.bounds.y_min}, {motion.bounds.y_max}]; "
+                                "home the machine or widen machine.bounds in config.yaml"
+                            ),
+                        }
+                    ), 400
                 # Pre-check against the last-polled position so obvious
                 # out-of-range jogs return a clean 400 instead of failing
                 # silently in the worker thread. The state snapshot is up to
                 # ~200 ms stale (5 Hz polling) — borderline jogs still
                 # re-check against Marlin's fresh position inside motion.jog.
-                motion.bounds.check(motion.state.x + dx, motion.state.y + dy)
-                threading.Thread(
-                    target=motion.jog, args=(dx, dy), daemon=True
-                ).start()
+                if motion.state.homed:
+                    motion.bounds.check(current_x + dx, current_y + dy)
+                if not start_motion_task(motion.jog, dx, dy):
+                    return jsonify({"ok": False, "error": "controller busy"}), 409
             return jsonify({"ok": True})
         except (BoundsError, ValueError) as e:
             return jsonify({"ok": False, "error": str(e)}), 400
@@ -225,6 +257,10 @@ def create_app(
     def post_stop_reset():
         return jsonify({"ok": True, "reset": motion.reset_estop()})
 
+    @app.post("/api/fault/clear")
+    def post_fault_clear():
+        return jsonify({"ok": True, "cleared": motion.clear_fault()})
+
     @app.post("/api/scan")
     def post_scan():
         data = request.get_json(force=True) or {}
@@ -233,6 +269,8 @@ def create_app(
         try:
             req = ScanRequest(
                 x_max=float(data["x_max"]),
+                probe_target_x=float(data.get("probe_target_x", DEFAULT_PROBE_TARGET_X)),
+                probe_speed_mm_s=float(data.get("probe_speed_mm_s", motion.scan_feed_mm_s)),
                 y_max=float(data["y_max"]),
                 y_min=float(data["y_min"]),
                 n_samples=int(data["n_samples"]),
@@ -241,7 +279,7 @@ def create_app(
         except (KeyError, ValueError) as e:
             return jsonify({"ok": False, "error": f"bad request: {e}"}), 400
 
-        for x in (PROBE_TARGET_X, req.x_max):
+        for x in (req.probe_target_x, req.x_max):
             for y in (req.y_min, req.y_max):
                 if not motion.bounds.contains(x, y):
                     return (

@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import logging
 import signal
-import sys
 from pathlib import Path
 
 import yaml
@@ -31,12 +30,13 @@ def build_controller(cfg: dict) -> tuple[MotionController, ProbeMonitor, ScanRun
     motion = MotionController(
         bounds=bounds,
         limits=limits,
-        marlin_port=marlin_cfg.get("port", "/dev/ttyUSB0"),
-        marlin_baudrate=marlin_cfg.get("baudrate", 115200),
+        marlin_port=marlin_cfg.get("port", ""),
+        marlin_baudrate=marlin_cfg.get("baudrate", 250000),
         x_axis=marlin_cfg.get("x_axis", "X"),
         y_axis=marlin_cfg.get("y_axis", "Y"),
         z_axis=marlin_cfg.get("z_axis", "Z"),
         simulate=cfg["driver"]["simulate"],
+        auto_connect=cfg["driver"]["simulate"],
         rapid_feed_mm_s=m.get("rapid_feed_mm_s", 15.0),
         scan_feed_mm_s=m.get("scan_feed_mm_s", 2.0),
     )
@@ -73,19 +73,37 @@ def main():
 
     host = args.host or cfg["network"]["host"]
     port = args.port or cfg["network"]["port"]
+    shutdown_started = False
 
-    def shutdown(*_):
+    def shutdown():
+        nonlocal shutdown_started
+        if shutdown_started:
+            return
+        shutdown_started = True
         logging.info("shutting down")
         scan.abort()
         motion.shutdown()
         probe.close()
-        sys.exit(0)
 
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
+    def handle_signal(_signum, _frame):
+        shutdown()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
 
     logging.info("serving on http://%s:%d", host, port)
-    sio.run(app, host=host, port=port, debug=args.debug, allow_unsafe_werkzeug=True)
+    try:
+        sio.run(
+            app,
+            host=host,
+            port=port,
+            debug=args.debug,
+            use_reloader=False,
+            allow_unsafe_werkzeug=True,
+        )
+    finally:
+        shutdown()
 
 
 if __name__ == "__main__":
