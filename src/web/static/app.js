@@ -4,7 +4,7 @@
 // and the plot is redrawn from that CSV so the browser and stored history
 // stay in sync.
 
-const socket = io({ transports: ["websocket", "polling"] });
+const socket = io({ transports: ["polling"] });
 let serialConnected = false;
 let serialSimulate = false;
 let serialConsoleLoaded = false;

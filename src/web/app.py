@@ -69,7 +69,13 @@ def create_app(
     app.config["scan_history"] = scan_history
     app.config["serial_console"] = serial_console
 
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+    socketio = SocketIO(
+        app,
+        cors_allowed_origins="*",
+        async_mode="threading",
+        allow_upgrades=False,
+        transports=["polling"],
+    )
     active_scans: dict[str, ScanRequest] = {}
     motion_dispatch_lock = threading.Lock()
 
