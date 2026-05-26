@@ -2,8 +2,8 @@
 #
 # Marlin handles the FPM kinematics on its side, so the Pi just sends and
 # receives workspace XY coordinates over serial. This config covers only
-# the Pi-side concerns: workspace envelope, feedrates, Marlin link,
-# an optional Pi-side probe mirror, and web server binding.
+# the Pi-side concerns: workspace envelope, feedrates, Marlin link, and
+# web server binding.
 
 machine:
   # Workspace bounds, in mm, in the user-facing XY plane.
@@ -11,15 +11,15 @@ machine:
   # Set Marlin's MIN_POS / MAX_POS to match (or wider) so Marlin and the
   # firmware agree on what's reachable.
   bounds:
-    x_min: -50.0
-    x_max:  50.0
-    y_min: -50.0
-    y_max:  50.0
+    x_min: -75.0
+    x_max:  75.0
+    y_min: -75.0
+    y_max:  75.0
   v_max_mm_s:   20.0   # TBD: max workspace feedrate
   a_max_mm_s2: 100.0   # TBD: max workspace acceleration
   jog_step_mm:  1.0    # default UI jog increment
-  scan_feed_mm_s: 2.0  # slow feed during probing descent
-  rapid_feed_mm_s: 15.0
+  scan_feed_mm_s: 20.0  # slow feed during probing descent
+  rapid_feed_mm_s: 50.0
 
 marlin:
   # The web UI chooses the serial port and baudrate at connect time.
@@ -31,28 +31,13 @@ marlin:
   y_axis: Y
   z_axis: Z
 
-probe:
-  # Optional Pi-side mirror of the probe signal for the web UI's live probe
-  # indicator. Scan moves themselves now use Marlin's G38.2 and the
-  # controller board's configured probe input.
-  gpio_pin: 17       # BCM numbering
-  # NPN-NC probe: idle = switch closed, NPN conducts and sinks the GPIO to
-  # GND, so the line reads LOW at rest. On contact the switch opens, the
-  # NPN cuts off, and the Pi's internal pull-up pulls the line HIGH. So
-  # contact == HIGH → active_low: false.
-  # The pull resistor must be PUD_UP regardless of NO/NC for an NPN sensor;
-  # see probe.py. A disconnected probe cable will read HIGH (≡ "triggered"),
-  # which is the fail-safe behavior: scans refuse to start with a missing
-  # cable rather than driving blindly.
-  active_low: false
-  debounce_us: 200
-
 network:
   host: "0.0.0.0"    # 0.0.0.0 = LAN-accessible; 127.0.0.1 = local only
   port: 5000
 
 driver:
   # Set to true to run without hardware (simulated Marlin board + simulated
-  # probe). Useful for UI development on a non-Pi machine. With false, the
-  # web app starts disconnected and the Serial panel is used to connect.
+  # probing responses). Useful for UI development on a non-Pi machine. With
+  # false, the web app starts disconnected and the Serial panel is used to
+  # connect.
   simulate: false

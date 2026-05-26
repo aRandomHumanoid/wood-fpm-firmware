@@ -13,16 +13,14 @@ a thin shim that:
 - accepts workspace XY commands from the web UI,
 - forwards them as straight G-code over serial to Marlin,
 - runs contour scans with Marlin's `G38.2` probe move,
-- can optionally mirror a probe signal on the Pi's GPIO for live UI state,
-- streams Marlin's reported XY position back to the browser.
+- streams Marlin's reported XY position and controller state back to the browser.
 
 The Pi never touches inverse/forward kinematics — Marlin does both.
 
 ## Install (on the Pi)
 
 ```bash
-sudo apt install python3-pip pigpiod
-sudo systemctl enable --now pigpiod
+sudo apt install python3-pip
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -32,8 +30,8 @@ pip install -r requirements.txt
 The user running this needs serial access — typically `sudo usermod -aG
 dialout $USER` then log out/in.
 
-Edit [`config.yaml`](config.yaml) with your workspace bounds, Marlin
-serial port, and probe GPIO pin before running on real hardware.
+Edit [`config.yaml`](config.yaml) with your workspace bounds and Marlin
+settings before running on real hardware.
 
 ## Marlin configuration
 
@@ -105,8 +103,7 @@ There is no per-stepper current monitoring (the overcurrent guard that
 existed in the older EPOS-based firmware doesn't have a Marlin
 equivalent). Treat Marlin's configured probe input as the physical-fault
 fail-safe for scans: each probe stroke is a `G38.2`, so Marlin errors if
-the target is reached without a trigger. The optional Pi-side probe mirror
-only feeds the web UI state indicator.
+the target is reached without a trigger.
 
 ## Architecture
 
@@ -114,7 +111,7 @@ only feeds the web UI state indicator.
 ┌──────────────────────────────────────────────────┐
 │  Browser (LAN)                                   │
 │  • Plotly.js (scan plot w/ faded history)        │
-│  • Socket.IO client (live pos + probe state)     │
+│  • Socket.IO client (live state)                 │
 └────────────────────┬─────────────────────────────┘
                      │ HTTP + WebSocket
 ┌────────────────────▼─────────────────────────────┐
@@ -126,11 +123,10 @@ only feeds the web UI state indicator.
 ┌────────────────────▼─────────────────────────────┐
 │  Controller layer (src/core/)                    │
 │  ├ MotionController  — workspace XY ⇄ G-code     │
-│  ├ ProbeMonitor      — optional GPIO UI mirror   │
 │  ├ ScanRunner        — G38.2 contour scan        │
 │  └ Limits/Bounds     — pos / vel / accel guards  │
 └────────────────────┬─────────────────────────────┘
-                     │ pyserial (G-code) / GPIO
+                     │ pyserial (G-code)
 ┌────────────────────▼─────────────────────────────┐
 │  MarlinDriver (src/drivers/marlin.py)            │
 │  Single-threaded G-code I/O over serial:         │
@@ -163,11 +159,6 @@ a 5 Hz state-poll thread (M114) that converts back into the UI state.
 Move completion waits for Marlin's stepper counts to settle after the
 logical target is reached, so scans start their probe stroke from the
 actual settled position.
-
-**[`src/core/probe.py`](src/core/probe.py)**
-`ProbeMonitor`: optional pigpio edge-detect mirror for a Pi-side probe
-input, used only for live UI state. Falls back to a software-only
-simulator when `pigpiod` is unavailable.
 
 **[`src/core/scan.py`](src/core/scan.py)**
 `ScanRunner`: for each Y sample, rapid to `x_max`, run `G38.2` toward the
@@ -216,7 +207,7 @@ path (Marlin does the kinematics) but kept as a reference / test fixture.
 
 Socket.IO events streamed to the browser:
 
-- `state` (~5 Hz) — `{x, y, z, probe, homed, busy, fault, last_error}`
+- `state` (~5 Hz) — `{x, y, z, homed, busy, fault, last_error}`
 - `scan_started` — `{scan_id, probe_target_x, x_max, y_max, y_min, n_samples}`
 - `scan_point` — `{scan_id, index, x, y}` (`x = null` means no contact on that row)
 - `scan_complete` — `{scan_id}`

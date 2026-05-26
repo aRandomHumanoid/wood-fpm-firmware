@@ -7,11 +7,6 @@ from src.core.motion import MotionController
 from src.web.app import create_app
 
 
-class FakeProbe:
-    def on_change(self, _fn):
-        pass
-
-
 class FakeScan:
     def __init__(self):
         self.running = False
@@ -38,7 +33,6 @@ def test_serial_api_connect_disconnect_cycle(tmp_path):
     try:
         app, _socketio = create_app(
             motion=motion,
-            probe=FakeProbe(),
             scan=FakeScan(),
             scan_history_path=tmp_path / "scan_history.csv",
         )
@@ -77,7 +71,6 @@ def test_serial_api_blocks_toggle_while_busy(tmp_path):
     try:
         app, _socketio = create_app(
             motion=motion,
-            probe=FakeProbe(),
             scan=FakeScan(),
             scan_history_path=tmp_path / "scan_history.csv",
         )
@@ -100,7 +93,6 @@ def test_serial_status_includes_discovered_ports(tmp_path, monkeypatch):
     try:
         app, _socketio = create_app(
             motion=motion,
-            probe=FakeProbe(),
             scan=FakeScan(),
             scan_history_path=tmp_path / "scan_history.csv",
         )
@@ -125,7 +117,6 @@ def test_serial_api_can_switch_out_of_simulation(tmp_path, monkeypatch):
     try:
         app, _socketio = create_app(
             motion=motion,
-            probe=FakeProbe(),
             scan=FakeScan(),
             scan_history_path=tmp_path / "scan_history.csv",
         )
@@ -165,7 +156,6 @@ def test_estop_can_be_reset(tmp_path):
     try:
         app, _socketio = create_app(
             motion=motion,
-            probe=FakeProbe(),
             scan=FakeScan(),
             scan_history_path=tmp_path / "scan_history.csv",
         )
@@ -195,7 +185,6 @@ def test_fault_can_be_cleared(tmp_path):
     try:
         app, _socketio = create_app(
             motion=motion,
-            probe=FakeProbe(),
             scan=FakeScan(),
             scan_history_path=tmp_path / "scan_history.csv",
         )
@@ -231,7 +220,6 @@ def test_busy_without_fault_can_be_cleared(tmp_path):
     try:
         app, _socketio = create_app(
             motion=motion,
-            probe=FakeProbe(),
             scan=FakeScan(),
             scan_history_path=tmp_path / "scan_history.csv",
         )
@@ -264,7 +252,6 @@ def test_jog_reports_current_position_outside_workspace(tmp_path):
     try:
         app, _socketio = create_app(
             motion=motion,
-            probe=FakeProbe(),
             scan=FakeScan(),
             scan_history_path=tmp_path / "scan_history.csv",
         )
@@ -286,7 +273,6 @@ def test_unhomed_jog_skips_absolute_workspace_precheck(tmp_path, monkeypatch):
     try:
         app, _socketio = create_app(
             motion=motion,
-            probe=FakeProbe(),
             scan=FakeScan(),
             scan_history_path=tmp_path / "scan_history.csv",
         )
@@ -322,7 +308,6 @@ def test_jog_rejects_when_controller_busy(tmp_path):
     try:
         app, _socketio = create_app(
             motion=motion,
-            probe=FakeProbe(),
             scan=FakeScan(),
             scan_history_path=tmp_path / "scan_history.csv",
         )
@@ -342,7 +327,6 @@ def test_jog_rejects_when_previous_jog_is_dispatching(tmp_path, monkeypatch):
     try:
         app, _socketio = create_app(
             motion=motion,
-            probe=FakeProbe(),
             scan=FakeScan(),
             scan_history_path=tmp_path / "scan_history.csv",
         )

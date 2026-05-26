@@ -46,7 +46,6 @@ socket.on("state", (s) => {
   setVal("pos-x", s.x);
   setVal("pos-y", s.y);
   setVal("pos-z", s.z);
-  setLed("probe-led", s.probe, false);
   setLed("homed-led", s.homed, false);
   updateJogMode(s.homed);
   controllerBusy = !!s.busy;
@@ -294,8 +293,8 @@ const plotLayout = {
   plot_bgcolor:  "#1c1c1f",
   font: { color: "#ddd" },
   margin: { l: 50, r: 20, t: 20, b: 40 },
-  xaxis: { title: "X (mm)", gridcolor: "#333" },
-  yaxis: { title: "Y contact (mm)", gridcolor: "#333" },
+  xaxis: { title: "Y (mm)", gridcolor: "#333" },
+  yaxis: { title: "X contact (mm)", gridcolor: "#333" },
   showlegend: true,
 };
 
@@ -334,8 +333,8 @@ function buildTraces(rows) {
     if (points.length === 0) return [];
     const age = ordered.length - 1 - idx;
     return [{
-      x: points.map((row) => row.x),
-      y: points.map((row) => row.y),
+      x: points.map((row) => row.y),
+      y: points.map((row) => row.x),
       mode: "lines+markers",
       name: `scan ${idx + 1}`,
       line: { width: 2 },

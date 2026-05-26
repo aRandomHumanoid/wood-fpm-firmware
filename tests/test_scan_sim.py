@@ -56,7 +56,7 @@ def test_scan_traces_known_contour():
         return abs(y)
 
     motion = FakeMotion(contour)
-    runner = ScanRunner(motion=motion, probe=object())
+    runner = ScanRunner(motion=motion)
     received = []
 
     started = threading.Event()
@@ -84,7 +84,7 @@ def test_scan_records_no_contact_when_surface_absent():
         return None     # no surface anywhere
 
     motion = FakeMotion(contour)
-    runner = ScanRunner(motion, object())
+    runner = ScanRunner(motion)
     pts = []
     done = threading.Event()
     runner.on_point = lambda p: pts.append(p)
@@ -101,7 +101,7 @@ def test_scan_uses_requested_probe_target_x():
         return -1.0
 
     motion = FakeMotion(contour)
-    runner = ScanRunner(motion, object())
+    runner = ScanRunner(motion)
     pts = []
     done = threading.Event()
     runner.on_point = lambda p: pts.append(p)
@@ -115,7 +115,7 @@ def test_scan_uses_requested_probe_target_x():
 
 def test_scan_uses_requested_probe_speed():
     motion = FakeMotion(lambda _y: 1.0)
-    runner = ScanRunner(motion, object())
+    runner = ScanRunner(motion)
     done = threading.Event()
     runner.on_complete = lambda _sid: done.set()
 
@@ -136,7 +136,7 @@ def test_scan_uses_requested_probe_speed():
 
 def test_scan_abort_does_not_halt_motion():
     motion = FakeMotion(lambda _y: 1.0)
-    runner = ScanRunner(motion, object())
+    runner = ScanRunner(motion)
 
     runner.abort()
 

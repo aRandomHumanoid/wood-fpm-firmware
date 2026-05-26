@@ -20,7 +20,6 @@ from typing import Callable, Optional
 import numpy as np
 
 from .motion import MotionController
-from .probe import ProbeMonitor
 
 log = logging.getLogger(__name__)
 
@@ -58,9 +57,8 @@ CompleteCb = Callable[[str], None]   # scan_id
 
 
 class ScanRunner:
-    def __init__(self, motion: MotionController, probe: ProbeMonitor):
+    def __init__(self, motion: MotionController):
         self.motion = motion
-        self.probe = probe
         self._thread: Optional[threading.Thread] = None
         self._abort = threading.Event()
         self._running = False

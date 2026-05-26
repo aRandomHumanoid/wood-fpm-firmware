@@ -13,7 +13,6 @@ the web layer don't need to change):
     halt()              — controlled stop, drives stay enabled
     stop()              — E-stop, also disables steppers
     set_feed_mm_s(v)    — override feedrate for the next moves
-    set_probe_state(b)  — push probe state into the broadcast loop
     is_busy() / state / subscribe(fn)
     start_polling(hz) / shutdown()
 
@@ -42,7 +41,6 @@ class State:
     x: float = 0.0
     y: float = 0.0
     z: float = 0.0
-    probe: bool = False
     homed: bool = False
     busy: bool = False
     fault: bool = False
@@ -565,9 +563,3 @@ class MotionController:
 
         self._set_state(x=x, y=y, z=z, busy=self._busy_flag)
         return True
-
-    # -------- probe binding --------
-
-    def set_probe_state(self, triggered: bool):
-        self._set_state(probe=triggered)
-        self._broadcast()

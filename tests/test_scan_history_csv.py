@@ -15,14 +15,6 @@ class FakeMotion:
     def subscribe(self, _fn):
         pass
 
-    def set_probe_state(self, _triggered):
-        pass
-
-
-class FakeProbe:
-    def on_change(self, _fn):
-        pass
-
 
 class FakeScan:
     def __init__(self):
@@ -39,7 +31,6 @@ def test_scan_history_csv_routes_and_append(tmp_path):
     csv_path = tmp_path / "scan_history.csv"
     app, _socketio = create_app(
         motion=FakeMotion(),
-        probe=FakeProbe(),
         scan=FakeScan(),
         scan_history_path=csv_path,
     )
@@ -80,7 +71,6 @@ def test_scan_history_clear_rejects_during_scan(tmp_path):
     csv_path = tmp_path / "scan_history.csv"
     app, _socketio = create_app(
         motion=FakeMotion(),
-        probe=FakeProbe(),
         scan=FakeScan(),
         scan_history_path=csv_path,
     )

@@ -11,7 +11,6 @@ import yaml
 
 from src.core.limits import MachineBounds, MotionLimits
 from src.core.motion import MotionController
-from src.core.probe import ProbeMonitor
 from src.core.scan import ScanRunner
 from src.web.app import create_app
 
@@ -21,7 +20,7 @@ def load_config(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
-def build_controller(cfg: dict) -> tuple[MotionController, ProbeMonitor, ScanRunner]:
+def build_controller(cfg: dict) -> tuple[MotionController, ScanRunner]:
     m = cfg["machine"]
     bounds = MachineBounds(**m["bounds"])
     limits = MotionLimits(v_max_mm_s=m["v_max_mm_s"], a_max_mm_s2=m["a_max_mm_s2"])
@@ -41,12 +40,9 @@ def build_controller(cfg: dict) -> tuple[MotionController, ProbeMonitor, ScanRun
         scan_feed_mm_s=m.get("scan_feed_mm_s", 2.0),
     )
 
-    p = cfg["probe"]
-    probe = ProbeMonitor(gpio_pin=p["gpio_pin"], active_low=p["active_low"], debounce_us=p["debounce_us"])
-
-    scan = ScanRunner(motion=motion, probe=probe)
+    scan = ScanRunner(motion=motion)
     motion.start_polling(hz=5.0)   # M114 round-trip is ~5-15ms over USB-CDC
-    return motion, probe, scan
+    return motion, scan
 
 
 def main():
@@ -63,10 +59,9 @@ def main():
     )
 
     cfg = load_config(args.config)
-    motion, probe, scan = build_controller(cfg)
+    motion, scan = build_controller(cfg)
     app, sio = create_app(
         motion=motion,
-        probe=probe,
         scan=scan,
         scan_history_path=args.config.resolve().parent / "scan_history.csv",
     )
@@ -83,7 +78,6 @@ def main():
         logging.info("shutting down")
         scan.abort()
         motion.shutdown()
-        probe.close()
 
     def handle_signal(_signum, _frame):
         shutdown()

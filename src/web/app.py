@@ -13,7 +13,7 @@ Endpoints:
     POST /api/scan/history/clear
 
 Socket.IO events out:
-  state         (~20 Hz)  — current pose / probe / busy / fault
+    state         (~20 Hz)  — current pose / busy / fault
     scan_started, scan_point, scan_complete  (used to trigger CSV-backed redraws)
 """
 
@@ -31,7 +31,6 @@ from flask_socketio import SocketIO
 
 from ..core.limits import BoundsError
 from ..core.motion import MotionController
-from ..core.probe import ProbeMonitor
 from ..core.scan import DEFAULT_PROBE_TARGET_X, ScanRequest, ScanRunner
 from ..drivers.marlin import MarlinError
 from .serial_console import SerialConsoleBuffer
@@ -52,7 +51,6 @@ def discover_serial_ports(preferred_port: str | None = None) -> list[str]:
 
 def create_app(
     motion: MotionController,
-    probe: ProbeMonitor,
     scan: ScanRunner,
     scan_history_path: Path | str = Path("scan_history.csv"),
 ) -> tuple[Flask, SocketIO]:
@@ -64,7 +62,6 @@ def create_app(
     scan_history = ScanHistoryCsvStore(Path(scan_history_path))
     serial_console = SerialConsoleBuffer()
     app.config["motion"] = motion
-    app.config["probe"] = probe
     app.config["scan"] = scan
     app.config["scan_history"] = scan_history
     app.config["serial_console"] = serial_console
@@ -113,11 +110,6 @@ def create_app(
 
     if hasattr(motion, "subscribe_serial"):
         motion.subscribe_serial(push_serial)
-
-    def on_probe(triggered: bool):
-        motion.set_probe_state(triggered)
-
-    probe.on_change(on_probe)
 
     def on_started(req: ScanRequest):
         active_scans[req.scan_id] = req

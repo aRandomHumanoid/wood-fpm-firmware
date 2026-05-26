@@ -3,11 +3,6 @@ from src.core.motion import MotionController
 from src.web.app import create_app
 
 
-class FakeProbe:
-    def on_change(self, _fn):
-        pass
-
-
 class FakeScan:
     def __init__(self):
         self.running = False
@@ -34,7 +29,6 @@ def test_serial_console_records_manual_and_ui_commands(tmp_path):
     try:
         app, _socketio = create_app(
             motion=motion,
-            probe=FakeProbe(),
             scan=FakeScan(),
             scan_history_path=tmp_path / "scan_history.csv",
         )
