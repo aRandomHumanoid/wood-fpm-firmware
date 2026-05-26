@@ -10,9 +10,8 @@ from pathlib import Path
 
 import yaml
 
-from src.core.kinematics import PPMKinematics
 from src.core.limits import MachineBounds, MotionLimits
-from src.core.motion import AxisConfig, MotionController
+from src.core.motion import MotionController
 from src.core.probe import ProbeMonitor
 from src.core.scan import ScanRunner
 from src.web.app import create_app
@@ -26,27 +25,18 @@ def load_config(path: Path) -> dict:
 def build_controller(cfg: dict) -> tuple[MotionController, ProbeMonitor, ScanRunner]:
     m = cfg["machine"]
     bounds = MachineBounds(**m["bounds"])
-    limits = MotionLimits(
-        v_max_mm_s=m["v_max_mm_s"],
-        a_max_mm_s2=m["a_max_mm_s2"],
-        overcurrent_mA=m.get("overcurrent_limit_mA", 0),
-    )
+    limits = MotionLimits(v_max_mm_s=m["v_max_mm_s"], a_max_mm_s2=m["a_max_mm_s2"])
 
-    k = cfg["kinematics"]
-    kin = PPMKinematics(Lc=k["Lc"], H=k["H"], D=k["D"], G_deg=k["G"], theta_max_deg=k["theta_max_deg"])
-
-    axes = cfg["axes"]
-    ax_theta = AxisConfig(name="theta", **axes["theta"])
-    ax_phi = AxisConfig(name="phi", **axes["phi"])
-
+    marlin_cfg = cfg.get("marlin", {})
     motion = MotionController(
-        kin=kin,
         bounds=bounds,
         limits=limits,
-        axis_theta=ax_theta,
-        axis_phi=ax_phi,
+        marlin_port=marlin_cfg.get("port", "/dev/ttyUSB0"),
+        marlin_baudrate=marlin_cfg.get("baudrate", 115200),
+        x_axis=marlin_cfg.get("x_axis", "X"),
+        y_axis=marlin_cfg.get("y_axis", "Y"),
+        z_axis=marlin_cfg.get("z_axis", "Z"),
         simulate=cfg["driver"]["simulate"],
-        epos_library=cfg["driver"]["epos_library"],
         rapid_feed_mm_s=m.get("rapid_feed_mm_s", 15.0),
         scan_feed_mm_s=m.get("scan_feed_mm_s", 2.0),
     )
@@ -55,7 +45,7 @@ def build_controller(cfg: dict) -> tuple[MotionController, ProbeMonitor, ScanRun
     probe = ProbeMonitor(gpio_pin=p["gpio_pin"], active_low=p["active_low"], debounce_us=p["debounce_us"])
 
     scan = ScanRunner(motion=motion, probe=probe)
-    motion.start_polling(hz=20.0)
+    motion.start_polling(hz=5.0)   # M114 round-trip is ~5-15ms over USB-CDC
     return motion, probe, scan
 
 
@@ -74,7 +64,12 @@ def main():
 
     cfg = load_config(args.config)
     motion, probe, scan = build_controller(cfg)
-    app, sio = create_app(motion=motion, probe=probe, scan=scan)
+    app, sio = create_app(
+        motion=motion,
+        probe=probe,
+        scan=scan,
+        scan_history_path=args.config.resolve().parent / "scan_history.csv",
+    )
 
     host = args.host or cfg["network"]["host"]
     port = args.port or cfg["network"]["port"]

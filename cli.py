@@ -6,10 +6,9 @@ Run:
 Type `help` at the prompt to list commands, `help <cmd>` for details, or
 `quit` (also `exit` / Ctrl-D) to leave. Arrow keys give command history.
 
-EPOS connections are opened once on startup and closed on exit; commands
-within a session reuse them. EPOS-side state (homing-attained flag and
-the post-homing software position limits) persists on the controllers
-until power-cycle, so re-launching the CLI doesn't require re-homing.
+The CLI shares the same MotionController + serial Marlin connection as the
+web UI. State (homed flag, current position) lives on the Marlin board and
+persists across CLI sessions until Marlin power-cycles.
 """
 
 from __future__ import annotations
@@ -17,9 +16,7 @@ from __future__ import annotations
 import argparse
 import cmd
 import logging
-import math
 import sys
-import time
 from pathlib import Path
 
 import yaml
@@ -29,48 +26,31 @@ try:
 except ImportError:
     pass
 
-from src.core.kinematics import KinematicsError, PPMKinematics
-from src.core.limits import (
-    BoundsError,
-    MachineBounds,
-    MotionLimits,
-    OvercurrentError,
-)
-from src.core.motion import AxisConfig, MotionController
-from src.drivers.epos import EposError
+from src.core.limits import BoundsError, MachineBounds, MotionLimits
+from src.core.motion import MotionController
+from src.drivers.marlin import MarlinError
 
 
 def build_motion(cfg: dict) -> MotionController:
     m = cfg["machine"]
     bounds = MachineBounds(**m["bounds"])
-    limits = MotionLimits(
-        v_max_mm_s=m["v_max_mm_s"],
-        a_max_mm_s2=m["a_max_mm_s2"],
-        overcurrent_mA=m.get("overcurrent_limit_mA", 0),
-    )
-    k = cfg["kinematics"]
-    kin = PPMKinematics(
-        Lc=k["Lc"], H=k["H"], D=k["D"], G_deg=k["G"],
-        theta_max_deg=k["theta_max_deg"],
-    )
-    axes = cfg["axes"]
-    ax_theta = AxisConfig(name="theta", **axes["theta"])
-    ax_phi = AxisConfig(name="phi", **axes["phi"])
+    limits = MotionLimits(v_max_mm_s=m["v_max_mm_s"], a_max_mm_s2=m["a_max_mm_s2"])
+    marlin_cfg = cfg.get("marlin", {})
     return MotionController(
-        kin=kin, bounds=bounds, limits=limits,
-        axis_theta=ax_theta, axis_phi=ax_phi,
+        bounds=bounds, limits=limits,
+        marlin_port=marlin_cfg.get("port", "/dev/ttyUSB0"),
+        marlin_baudrate=marlin_cfg.get("baudrate", 115200),
+        x_axis=marlin_cfg.get("x_axis", "X"),
+        y_axis=marlin_cfg.get("y_axis", "Y"),
+        z_axis=marlin_cfg.get("z_axis", "Z"),
         simulate=cfg["driver"]["simulate"],
-        epos_library=cfg["driver"]["epos_library"],
         rapid_feed_mm_s=m.get("rapid_feed_mm_s", 15.0),
         scan_feed_mm_s=m.get("scan_feed_mm_s", 2.0),
     )
 
 
 class FPMShell(cmd.Cmd):
-    intro = (
-        "Wood FPM interactive CLI. "
-        "Type 'help' for commands, 'quit' to exit."
-    )
+    intro = "Wood FPM interactive CLI. Type 'help' for commands, 'quit' to exit."
     prompt = "fpm> "
 
     def __init__(self, motion: MotionController):
@@ -84,10 +64,10 @@ class FPMShell(cmd.Cmd):
         Ctrl-C during a long-running op halts motion and returns to prompt."""
         try:
             fn(*args)
-        except (BoundsError, OvercurrentError) as e:
+        except BoundsError as e:
             print(f"BLOCKED: {e}")
-        except EposError as e:
-            print(f"EPOS ERROR: {e}")
+        except MarlinError as e:
+            print(f"MARLIN ERROR: {e}")
         except KeyboardInterrupt:
             print("\n^C — halting motion")
             try:
@@ -103,12 +83,11 @@ class FPMShell(cmd.Cmd):
     # ---- commands --------------------------------------------------------
 
     def do_home(self, arg: str):
-        """home — drive both joints into their hard stops, then set the
-        post-homing software position limits."""
+        """home — run Marlin's G28 on both configured axes."""
         if arg.strip():
             print("usage: home")
             return
-        print("homing both axes (drives each into its hard stop)...")
+        print("homing both axes...")
         self._run(self.motion.home_all, label="homed")
 
     def do_move(self, arg: str):
@@ -136,142 +115,26 @@ class FPMShell(cmd.Cmd):
             print(f"jogging by ({x:+.3f}, {y:+.3f}) mm")
             self._run(self.motion.jog, x, y)
 
-    def do_rotate(self, arg: str):
-        """rotate [abs|rel] {theta|phi} DEG — rotate one joint by/to N°.
-        Default is relative.
-            rotate theta -45      # relative: -45° from current pose
-            rotate rel theta -45  # same as above
-            rotate abs theta -45  # absolute: go to joint angle -45°
-        """
-        parts = arg.split()
-        mode = "rel"
-        if parts and parts[0] in ("abs", "rel"):
-            mode = parts.pop(0)
-        if len(parts) != 2:
-            print("usage: rotate [abs|rel] {theta|phi} DEG")
-            return
-        name, deg_s = parts
-        if name not in ("theta", "phi"):
-            print("axis must be 'theta' or 'phi'")
-            return
-        try:
-            deg = float(deg_s)
-        except ValueError:
-            print("DEG must be a number")
-            return
-        if mode == "abs":
-            print(f"rotating {name} to {deg:+.3f}°")
-        else:
-            print(f"rotating {name} by {deg:+.3f}°")
-        self._run(self.motion.rotate_axis, name, deg, mode == "abs")
-
     def do_status(self, arg: str):
-        """status — print current joint angles, motor counts, and xyz."""
+        """status — print current workspace position from Marlin."""
         if arg.strip():
             print("usage: status")
             return
         try:
-            theta_counts = self.motion.axis_theta.position()
-            phi_counts = self.motion.axis_phi.position()
-        except EposError as e:
-            print(f"EPOS ERROR: {e}")
+            pos = self.motion.marlin.position()
+        except MarlinError as e:
+            print(f"MARLIN ERROR: {e}")
             return
-        theta_deg = self.motion.axis_theta_cfg.counts_to_deg(theta_counts)
-        phi_deg = self.motion.axis_phi_cfg.counts_to_deg(phi_counts)
-        theta_kdeg = self.motion.axis_theta_cfg.counts_to_kinematics_deg(theta_counts)
-        phi_kdeg = self.motion.axis_phi_cfg.counts_to_kinematics_deg(phi_counts)
-        print(f"theta: {theta_deg:+7.2f}°  ({theta_counts:+7d} counts)  [kin {theta_kdeg:+7.2f}°]")
-        print(f"phi:   {phi_deg:+7.2f}°  ({phi_counts:+7d} counts)  [kin {phi_kdeg:+7.2f}°]")
-        # Forward kinematics is only well-defined inside the workspace
-        # envelope. Outside it (unhomed, rotated past the envelope), the
-        # PPM trilateration goes singular.
-        try:
-            x, y, z = self.motion.kin.forward_kinematics(
-                math.radians(theta_kdeg), math.radians(phi_kdeg)
-            )
-        except KinematicsError as e:
-            print(f"xyz:   <unreachable> ({e})")
-            return
-        print(f"xyz:   ({x:+.3f}, {y:+.3f}, {z:+.3f}) mm (relative to home)")
-
-    WIGGLE_DEFAULT_DEG = 5.0
-    WIGGLE_VELOCITY_RPM = 20
-
-    def do_wiggle(self, arg: str):
-        """wiggle [DEG] — rotate BOTH joints DEG° CW then back to start.
-        Slow (20 motor-RPM) by design — useful for verifying both motors
-        respond, the bounds check works, and motion is smooth.
-            wiggle           # ±5°  on both axes (default)
-            wiggle 3         # ±3°  on both axes
-        """
-        parts = arg.split()
-        deg = self.WIGGLE_DEFAULT_DEG
-        if parts:
-            try:
-                deg = float(parts[0])
-            except ValueError:
-                print("usage: wiggle [DEG]")
-                return
-        print(f"wiggling both joints +{deg:.1f}° then back at {self.WIGGLE_VELOCITY_RPM} rpm")
-
-        try:
-            self.motion.rotate_both_axes(deg, velocity_rpm=self.WIGGLE_VELOCITY_RPM)
-            print(f"forward (+{deg:.1f}°)")
-            time.sleep(0.3)
-            self.motion.rotate_both_axes(-deg, velocity_rpm=self.WIGGLE_VELOCITY_RPM)
-            print(f"back   (-{deg:.1f}°)  → at start")
-        except (BoundsError, OvercurrentError) as e:
-            print(f"BLOCKED: {e}")
-        except EposError as e:
-            print(f"EPOS ERROR: {e}")
-        except KeyboardInterrupt:
-            print("\n^C — halting motion")
-            try:
-                self.motion.halt()
-            except Exception:
-                pass
+        x = pos.logical.get(self.motion._x_letter, 0.0)
+        y = pos.logical.get(self.motion._y_letter, 0.0)
+        z = pos.logical.get(self.motion._z_letter, 0.0)
+        print(f"workspace: ({x:+.3f}, {y:+.3f}, {z:+.3f}) mm")
 
     def do_stop(self, arg: str):
-        """stop — E-stop: halt motion and disable both drives.
-        Use 'enable' to re-engage afterward."""
+        """stop — E-stop: halt motion and disable steppers (M410 + M84).
+        Issue any move (or 'home') to re-enable the steppers automatically."""
         self.motion.stop()
-        print("halted and disabled — run 'enable' or 'home' to re-engage")
-
-    def do_clear_faults(self, arg: str):
-        """clear_faults — clear fault state on both drives.
-        Run this if `status` / a previous command left an axis in a fault
-        and you want to recover without re-homing. Follow with `enable`."""
-        if arg.strip():
-            print("usage: clear_faults")
-            return
-        for axis, name in (
-            (self.motion.axis_theta, "theta"),
-            (self.motion.axis_phi,   "phi"),
-        ):
-            was_faulted = False
-            if hasattr(axis, "fault_state"):
-                try:
-                    was_faulted = axis.fault_state()
-                except EposError:
-                    pass
-            try:
-                axis.clear_fault()
-                print(f"{name}: cleared" + ("  (was faulted)" if was_faulted else ""))
-            except EposError as e:
-                print(f"{name}: EPOS ERROR {e}")
-
-    def do_enable(self, arg: str):
-        """enable — re-engage both drives in profile-position mode
-        (use after 'stop' or a fault)."""
-        try:
-            for axis in (self.motion.axis_theta, self.motion.axis_phi):
-                axis.clear_fault()
-                axis.enable()
-                axis.activate_pp_mode()
-        except EposError as e:
-            print(f"EPOS ERROR: {e}")
-            return
-        print("enabled (profile-position mode)")
+        print("halted and disabled — issue a move or 'home' to re-engage")
 
     def do_quit(self, arg: str):
         """quit — exit the shell."""

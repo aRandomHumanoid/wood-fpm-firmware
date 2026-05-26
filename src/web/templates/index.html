@@ -12,7 +12,10 @@
 <body>
   <header>
     <h1>Wood FPM</h1>
-    <button id="estop" class="estop">E-STOP</button>
+    <div class="header-actions">
+      <button id="estop-reset" class="estop-reset" disabled>Reset E-STOP</button>
+      <button id="estop" class="estop">E-STOP</button>
+    </div>
   </header>
 
   <main>
@@ -22,8 +25,6 @@
         <div><span class="lbl">X</span><span id="pos-x" class="val">—</span> mm</div>
         <div><span class="lbl">Y</span><span id="pos-y" class="val">—</span> mm</div>
         <div><span class="lbl">Z</span><span id="pos-z" class="val">—</span> mm</div>
-        <div><span class="lbl">θ</span><span id="pos-th" class="val">—</span>°</div>
-        <div><span class="lbl">φ</span><span id="pos-ph" class="val">—</span>°</div>
         <div><span class="lbl">Probe</span><span id="probe-led" class="led"></span></div>
         <div><span class="lbl">Homed</span><span id="homed-led" class="led"></span></div>
         <div><span class="lbl">Busy</span><span id="busy-led" class="led"></span></div>
@@ -42,14 +43,53 @@
       </div>
     </section>
 
+    <section class="panel" id="serial-panel">
+      <h2>Serial</h2>
+      <div class="form">
+        <label>Mode
+          <select id="serial-driver-mode">
+            <option value="serial">serial</option>
+            <option value="simulation">simulation</option>
+          </select>
+        </label>
+        <label>Port
+          <select id="serial-port">
+            <option value="/dev/ttyACM0">/dev/ttyACM0</option>
+          </select>
+        </label>
+        <label>Baudrate <input type="number" id="serial-baudrate" value="250000" min="1" step="1" /></label>
+        <button id="serial-refresh" type="button">Refresh</button>
+        <button id="serial-toggle">Connect</button>
+      </div>
+      <div class="grid serial-grid">
+        <div><span class="lbl">Link</span><span id="serial-led" class="led"></span></div>
+        <div><span class="lbl">Mode</span><span id="serial-mode" class="val">—</span></div>
+      </div>
+      <div id="serial-status" class="err"></div>
+    </section>
+
+    <section class="panel" id="serial-console-panel">
+      <h2>G-code Terminal</h2>
+      <label class="serial-filter-toggle">
+        <input type="checkbox" id="serial-filter-m114" checked />
+        Hide M114 keepalive
+      </label>
+      <div id="serial-console" class="serial-console"></div>
+      <div class="form serial-console-form">
+        <label>Command <input type="text" id="serial-command" placeholder="M115" /></label>
+        <button id="serial-send" type="button">Send</button>
+        <button id="serial-console-clear" type="button">Clear</button>
+      </div>
+    </section>
+
     <section class="panel" id="jog-panel">
       <h2>Jog</h2>
       <div class="jog-pad">
-        <button data-dx="0"  data-dy="1"  class="jog">Y+</button>
-        <button data-dx="-1" data-dy="0"  class="jog">X−</button>
-        <button id="home" class="home">Home</button>
-        <button data-dx="1"  data-dy="0"  class="jog">X+</button>
-        <button data-dx="0"  data-dy="-1" class="jog">Y−</button>
+        <button data-dx="0"  data-dy="1"  class="jog jog-up">Y+</button>
+        <button data-dx="-1" data-dy="0"  class="jog jog-left">X−</button>
+        <button id="home" class="home jog-home">Home</button>
+        <button data-dx="1"  data-dy="0"  class="jog jog-right">X+</button>
+        <button data-dx="0"  data-dy="-1" class="jog jog-down">Y−</button>
       </div>
       <label>Step (mm) <input type="number" id="jog-step" value="1" step="0.1" min="0.01" /></label>
     </section>
@@ -57,8 +97,8 @@
     <section class="panel" id="scan-panel">
       <h2>Scan</h2>
       <div class="form">
-        <label>X min <input type="number" id="s-xmin" value="-10" step="0.1" /></label>
-        <label>X max <input type="number" id="s-xmax" value="10"  step="0.1" /></label>
+        <label>Probe Target X <input type="number" id="s-probe-x" value="0" step="0.1" readonly /></label>
+        <label>Start X <input type="number" id="s-xmax" value="10"  step="0.1" /></label>
         <label>Y max <input type="number" id="s-ymax" value="10"  step="0.1" /></label>
         <label>Y min <input type="number" id="s-ymin" value="-10" step="0.1" /></label>
         <label>Samples <input type="number" id="s-n" value="20" min="2" step="1" /></label>

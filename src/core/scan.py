@@ -1,12 +1,12 @@
 """1-D contour scan orchestration.
 
-For each X sample (evenly spaced across [x_min, x_max]):
-  1. Rapid to (x, y_max).
-  2. Slow-feed toward (x, y_min), watching the probe.
-  3. On probe trigger: halt, record (x, current_y) as a contact point.
-     If no trigger before reaching y_min: record (x, None).
-  4. Retract rapid to (x, y_max).
-  5. Advance X.
+For each Y sample (evenly spaced across [y_min, y_max]):
+    1. Rapid to (x_max, y).
+    2. Slow-feed probe toward x=0 with Marlin G38.2.
+    3. On probe trigger: record (current_x, y) as a contact point.
+         If x=0 is reached without contact: record (None, y).
+    4. Retract rapid to (x_max, y).
+    5. Advance Y.
 Emits scan_started / scan_point / scan_complete via callbacks.
 """
 
@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from dataclasses import dataclass, asdict
 from typing import Callable, Optional
 
@@ -25,10 +24,11 @@ from .probe import ProbeMonitor
 
 log = logging.getLogger(__name__)
 
+PROBE_TARGET_X = 0.0
+
 
 @dataclass
 class ScanRequest:
-    x_min: float
     x_max: float
     y_max: float
     y_min: float
@@ -36,15 +36,17 @@ class ScanRequest:
     scan_id: str = ""
 
     def to_dict(self):
-        return asdict(self)
+        payload = asdict(self)
+        payload["probe_target_x"] = PROBE_TARGET_X
+        return payload
 
 
 @dataclass
 class ScanPoint:
     scan_id: str
     index: int
-    x: float
-    y: Optional[float]   # None == no contact
+    x: Optional[float]   # None == no contact
+    y: Optional[float]
 
     def to_dict(self):
         return {"scan_id": self.scan_id, "index": self.index, "x": self.x, "y": self.y}
@@ -88,55 +90,27 @@ class ScanRunner:
             try: self.on_started(req)
             except Exception: log.exception("on_started")
 
-        xs = np.linspace(req.x_min, req.x_max, max(req.n_samples, 1))
+        ys = np.linspace(req.y_min, req.y_max, max(req.n_samples, 1))
         try:
-            for i, x in enumerate(xs):
+            for i, y in enumerate(ys):
                 if self._abort.is_set():
                     break
-                # 1. Rapid to top.
+                # 1. Rapid to the start of the probe stroke.
                 self.motion.set_feed_mm_s(self.motion.rapid_feed_mm_s)
-                self.motion.move_to(float(x), req.y_max, wait=True)
+                self.motion.move_to(req.x_max, float(y), wait=True)
                 if self._abort.is_set():
                     break
 
-                # 2. Slow descent toward y_min, with probe watch.
+                # 2. Probe toward X=0 with Marlin-native G38.2.
                 self.motion.set_feed_mm_s(self.motion.scan_feed_mm_s)
-                triggered = threading.Event()
-
-                def on_change(state: bool, _evt=triggered):
-                    if state:
-                        _evt.set()
-
-                self.probe.on_change(on_change)
-                contact_y: Optional[float] = None
-                try:
-                    # already in contact before starting?
-                    if self.probe.is_triggered():
-                        contact_y = self.motion.state.y
-                    else:
-                        self.motion.move_to(float(x), req.y_min, wait=False)
-                        while True:
-                            if self._abort.is_set():
-                                break
-                            if triggered.is_set():
-                                self.motion.halt()
-                                contact_y = self.motion.state.y
-                                break
-                            if not self.motion.is_busy():
-                                # reached y_min without contact
-                                break
-                            time.sleep(0.002)
-                finally:
-                    try:
-                        self.probe._listeners.remove(on_change)  # noqa: SLF001
-                    except ValueError:
-                        pass
+                hit = self.motion.probe_to_x(PROBE_TARGET_X, float(y))
+                contact_x = self.motion.state.x if hit else None
 
                 pt = ScanPoint(
                     scan_id=req.scan_id,
                     index=i,
-                    x=float(x),
-                    y=contact_y,
+                    x=contact_x,
+                    y=float(y),
                 )
                 if self.on_point:
                     try: self.on_point(pt)
@@ -147,7 +121,7 @@ class ScanRunner:
 
                 # 3. Retract.
                 self.motion.set_feed_mm_s(self.motion.rapid_feed_mm_s)
-                self.motion.move_to(float(x), req.y_max, wait=True)
+                self.motion.move_to(req.x_max, float(y), wait=True)
         except Exception:
             log.exception("scan run")
         finally:

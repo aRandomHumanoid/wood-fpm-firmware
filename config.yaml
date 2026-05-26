@@ -1,8 +1,15 @@
 # Wood FPM firmware configuration.
-# Values marked TBD must be measured/confirmed before running on hardware.
+#
+# Marlin handles the FPM kinematics on its side, so the Pi just sends and
+# receives workspace XY coordinates over serial. This config covers only
+# the Pi-side concerns: workspace envelope, feedrates, Marlin link,
+# an optional Pi-side probe mirror, and web server binding.
 
 machine:
   # Workspace bounds, in mm, in the user-facing XY plane.
+  # The Pi rejects any move outside this rectangle before issuing a G-code.
+  # Set Marlin's MIN_POS / MAX_POS to match (or wider) so Marlin and the
+  # firmware agree on what's reachable.
   bounds:
     x_min: -30.0
     x_max:  30.0
@@ -13,95 +20,22 @@ machine:
   jog_step_mm:  1.0    # default UI jog increment
   scan_feed_mm_s: 2.0  # slow feed during probing descent
   rapid_feed_mm_s: 15.0
-  # Per-axis motor current ceiling. Any move that observes |current| above
-  # this on either axis halts both motors and raises OvercurrentError.
-  # Homing uses its own threshold (axes.*.home_current_threshold_mA); this
-  # limit is a safety net above it. Set to 0 to disable.
-  overcurrent_limit_mA: 0
 
-kinematics:
-  # PPM parameters (Triangular-Bipyramid Lc/H/D/G form). TBD — measure on hardware.
-  Lc: 50.0
-  H:  10.0
-  D:  7.50
-  G:  60.0          # degrees
-  theta_max_deg: 25 # joint-angle envelope; soft limit before motor commands
-
-axes:
-  # Each EPOS2 has its own USB cable to the Pi. Maxon enumerates them as
-  # USB0, USB1, ... (not /dev/ttyUSB*). If the two motors come up swapped,
-  # flip USB0/USB1 here. epos_node is the controller's internal CAN id
-  # (factory default 1); change only if reconfigured via EPOS Studio.
-  #
-  # counts_per_rev = encoder counts per MOTOR-shaft revolution as reported
-  # by the EPOS. The ENC 16 EASY XT is 1024 cpt; the EPOS does 4x
-  # quadrature decoding (counts every edge on A and B), giving 1024 × 4 =
-  # 4096 counts per motor rev. gear_ratio is then the purely mechanical
-  # reduction. Total counts per output rev = counts_per_rev × gear_ratio
-  # = 4096 × 4.3 ≈ 17613.
-  theta:            # motor 0 — drives PPM theta joint
-    epos_node: 1
-    port_name: USB1
-    counts_per_rev: 4096   # 1024 cpt × 4x quadrature
-    gear_ratio: 4.3        # planetary reduction (motor -> joint)
-    invert: true
-    home_method: -3        # EPOS2 homing: current threshold, negative speed (CCW into hard stop)
-    home_speed_rpm: 50
-    home_accel_rpm_s: 500
-    home_current_threshold_mA: 2000
-    # Motor-shaft profile applied after homing and for direct rotate_axis
-    # commands. Workspace moves (move/jog) reuse it too; call MotionController
-    # .set_feed_mm_s() to override at runtime. Keep above the brushless
-    # commutation-cogging regime (~30 RPM) for smooth motion.
-    motor_velocity_rpm: 100
-    motor_accel_rpm_s:  1000
-    # User-facing max joint angle from home (encoder 0). The firmware's
-    # Python-side bounds check rejects any rotate / move whose target
-    # falls outside [0°, joint_travel_deg]; subsequent moves are refused
-    # with BoundsError BEFORE any motor is commanded. The EPOS-side
-    # software position limits are looser (extended by
-    # home_overshoot_margin_deg on both ends) so a few degrees of PID
-    # settling past 0 or joint_travel_deg don't trip Internal Limit
-    # Active. For negative homing, this becomes [-travel, 0] instead.
-    joint_travel_deg: 60
-    # Encoder joint angle (post-gear) at which the platform is at the
-    # KINEMATICS neutral pose (workspace origin). 0 = home is the neutral
-    # pose. If home is a corner of a symmetric travel, set this to
-    # joint_travel_deg / 2 (e.g. 30 for a 60° range). Used to translate
-    # between encoder-frame angles (status, rotate) and kinematics-frame
-    # angles (move, forward kinematics).
-    home_offset_deg: 30
-    # After the EPOS reports homing-attained, back off this many degrees
-    # from the hard stop and re-zero the encoder there. Without this, a
-    # subsequent move/rotate back to position 0 slams the joint into the
-    # stop and trips Following Error.
-    home_back_off_deg: 1.0
-    # Margin (in degrees) by which the EPOS-side software position limits
-    # extend past the Python-side strict bounds, on BOTH ends. The Python
-    # bounds reject obviously-bad commands cleanly with BoundsError; the
-    # EPOS bounds absorb PID settling overshoot so a few degrees past 0
-    # or joint_travel_deg doesn't fault the drive with Internal Limit
-    # Active. Keep ≤ home_back_off_deg if you want a hard guarantee that
-    # the motor can never be commanded into the hard stop.
-    home_overshoot_margin_deg: 5.0
-  phi:              # motor 1 — drives PPM phi joint
-    epos_node: 1
-    port_name: USB0
-    counts_per_rev: 4096
-    gear_ratio: 4.3
-    invert: true
-    home_method: -3
-    home_speed_rpm: 50
-    home_accel_rpm_s: 500
-    home_current_threshold_mA: 2000
-    motor_velocity_rpm: 100
-    motor_accel_rpm_s:  1000
-    joint_travel_deg: 60
-    home_offset_deg: 30
-    home_back_off_deg: 1.0
-    home_overshoot_margin_deg: 5.0
+marlin:
+  # Serial connection to the Marlin board.
+  port: /dev/ttyACM0   # often /dev/ttyACM0 on USB-CDC boards; /dev/ttyUSB0 on FTDI/CH340
+  baudrate: 250000     # match Marlin's BAUDRATE
+  # Marlin axis letters that map to workspace X / Y / Z. Defaults match a
+  # standard Marlin configuration. Change here only if your Marlin firmware
+  # reports the workspace axes under different letters.
+  x_axis: X
+  y_axis: Y
+  z_axis: Z
 
 probe:
+  # Optional Pi-side mirror of the probe signal for the web UI's live probe
+  # indicator. Scan moves themselves now use Marlin's G38.2 and the
+  # controller board's configured probe input.
   gpio_pin: 17       # BCM numbering
   # NPN-NC probe: idle = switch closed, NPN conducts and sinks the GPIO to
   # GND, so the line reads LOW at rest. On contact the switch opens, the
@@ -119,7 +53,6 @@ network:
   port: 5000
 
 driver:
-  # Set to true to run without hardware (kinematics + simulated motors + simulated probe).
-  # Useful for UI development on a non-Pi machine.
+  # Set to true to run without hardware (simulated Marlin board + simulated
+  # probe). Useful for UI development on a non-Pi machine.
   simulate: false
-  epos_library: libEposCmd.so
