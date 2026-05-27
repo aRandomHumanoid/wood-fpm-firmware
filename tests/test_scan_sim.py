@@ -143,3 +143,45 @@ def test_scan_abort_does_not_halt_motion():
     assert runner._abort.is_set() is True  # noqa: SLF001
     assert motion.halt_calls == 0
 
+
+def test_scan_can_run_back_to_back():
+    motion = FakeMotion(lambda y: y * 0.5)
+    runner = ScanRunner(motion)
+
+    for scan_id in ("t5", "t6"):
+        done = threading.Event()
+        runner.on_complete = lambda _sid, done=done: done.set()
+
+        runner.start(
+            ScanRequest(
+                x_max=4,
+                probe_target_x=0,
+                y_max=5,
+                y_min=-5,
+                n_samples=3,
+                scan_id=scan_id,
+            )
+        )
+
+        assert done.wait(timeout=20.0)
+        assert runner.running is False
+
+
+def test_scan_running_clears_if_restore_default_feed_fails():
+    motion = FakeMotion(lambda _y: 1.0)
+    runner = ScanRunner(motion)
+    done = threading.Event()
+    runner.on_complete = lambda _sid: done.set()
+
+    def flaky_set_feed(v):
+        motion.feed_history.append(v)
+        if v == motion.limits.v_max_mm_s:
+            raise ValueError("bad restore")
+
+    motion.set_feed_mm_s = flaky_set_feed
+
+    runner.start(ScanRequest(x_max=4, probe_target_x=0, y_max=5, y_min=-5, n_samples=2, scan_id="t7"))
+
+    assert done.wait(timeout=20.0)
+    assert runner.running is False
+

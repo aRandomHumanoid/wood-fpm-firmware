@@ -154,6 +154,29 @@ def test_duplicate_state_emits_are_throttled(tmp_path, monkeypatch):
 
         assert [event for event, _payload in emitted] == ["state", "state"]
         assert emitted[0][1] == emitted[1][1]
+        assert emitted[0][1]["scan_running"] is False
+    finally:
+        motion.shutdown()
+
+
+def test_state_emit_includes_scan_running_flag(tmp_path, monkeypatch):
+    motion = build_motion()
+    scan = FakeScan()
+    try:
+        _app, socketio = create_app(
+            motion=motion,
+            scan=scan,
+            scan_history_path=tmp_path / "scan_history.csv",
+        )
+
+        emitted = []
+        monkeypatch.setattr(socketio, "emit", lambda event, payload: emitted.append((event, payload)))
+
+        scan.running = True
+        motion._broadcast()  # noqa: SLF001
+
+        assert emitted[0][0] == "state"
+        assert emitted[0][1]["scan_running"] is True
     finally:
         motion.shutdown()
 

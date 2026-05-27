@@ -105,12 +105,19 @@ def create_app(
     def push_state(state):
         nonlocal last_state_payload, last_state_emit_at
         payload = state.to_dict()
+        payload["scan_running"] = scan.running
         now = time.monotonic()
         if payload == last_state_payload and (now - last_state_emit_at) < STATE_HEARTBEAT_S:
             return
         socketio.emit("state", payload)
         last_state_payload = dict(payload)
         last_state_emit_at = now
+
+    def push_motion_state_if_available():
+        state = getattr(motion, "state", None)
+        if state is None or not hasattr(state, "to_dict"):
+            return
+        push_state(state)
 
     motion.subscribe(push_state)
 
@@ -123,6 +130,7 @@ def create_app(
 
     def on_started(req: ScanRequest):
         active_scans[req.scan_id] = req
+        push_motion_state_if_available()
         socketio.emit("scan_started", req.to_dict())
 
     def on_point(pt):
@@ -133,6 +141,7 @@ def create_app(
 
     def on_complete(scan_id: str):
         active_scans.pop(scan_id, None)
+        push_motion_state_if_available()
         socketio.emit("scan_complete", {"scan_id": scan_id})
 
     scan.on_started = on_started

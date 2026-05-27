@@ -19,7 +19,7 @@ machine:
   a_max_mm_s2: 100.0   # TBD: max workspace acceleration
   jog_step_mm:  1.0    # default UI jog increment
   scan_feed_mm_s: 20.0  # slow feed during probing descent
-  rapid_feed_mm_s: 3-.0
+  rapid_feed_mm_s: 50.0
 
 marlin:
   # The web UI chooses the serial port and baudrate at connect time.

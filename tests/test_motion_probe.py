@@ -1,3 +1,6 @@
+import threading
+import time
+
 import pytest
 
 import src.core.motion as motion_module
@@ -59,6 +62,9 @@ def test_probe_to_x_uses_probe_reply_when_position_query_is_stale():
     )
 
     class FakeMarlin:
+        def __init__(self):
+            self.position_calls = 0
+
         def probe_target(self, axes, feedrate_mm_min=None, timeout_s=300.0):
             assert axes == {"X": 0.0, "Y": 4.0}
             assert feedrate_mm_min == 120.0
@@ -66,6 +72,7 @@ def test_probe_to_x_uses_probe_reply_when_position_query_is_stale():
             return {"X": 2.9, "Y": 4.0, "Z": 0.0}
 
         def position(self):
+            self.position_calls += 1
             return Position(
                 logical={"X": 0.0, "Y": 4.0, "Z": 0.0},
                 counts={"X": 0, "Y": 400, "Z": 0},
@@ -77,7 +84,8 @@ def test_probe_to_x_uses_probe_reply_when_position_query_is_stale():
         def close(self):
             pass
 
-    motion.marlin = FakeMarlin()
+    fake_marlin = FakeMarlin()
+    motion.marlin = fake_marlin
     motion._set_state(x=10.0, y=4.0, z=0.0)  # noqa: SLF001
 
     try:
@@ -89,6 +97,62 @@ def test_probe_to_x_uses_probe_reply_when_position_query_is_stale():
         assert motion.state.x == 2.9
         assert motion.state.y == 4.0
         assert motion.state.z == 0.0
+        assert fake_marlin.position_calls == 1
+    finally:
+        motion.shutdown()
+
+
+def test_probe_to_x_suspends_background_polling_until_probe_completes(monkeypatch):
+    motion = MotionController(
+        bounds=MachineBounds(x_min=0.0, x_max=10.0, y_min=-10.0, y_max=10.0),
+        limits=MotionLimits(v_max_mm_s=20.0, a_max_mm_s2=100.0),
+        simulate=False,
+        auto_connect=False,
+        scan_feed_mm_s=2.0,
+    )
+
+    started = threading.Event()
+    release = threading.Event()
+    refresh_calls = []
+
+    class FakeMarlin:
+        def probe_target(self, axes, feedrate_mm_min=None, timeout_s=300.0):
+            assert axes == {"X": 0.0, "Y": 4.0}
+            assert feedrate_mm_min == 120.0
+            assert timeout_s == 120.0
+            started.set()
+            assert release.wait(timeout=2.0)
+            return {"X": 2.9, "Y": 4.0, "Z": 0.0}
+
+        def disable_steppers(self):
+            pass
+
+        def close(self):
+            pass
+
+    motion.marlin = FakeMarlin()
+
+    def fake_refresh_position():
+        refresh_calls.append(time.monotonic())
+        return True
+
+    monkeypatch.setattr(motion, "_refresh_position", fake_refresh_position)
+
+    try:
+        motion.set_feed_mm_s(motion.scan_feed_mm_s)
+        motion.start_polling(hz=50.0)
+        probe_thread = threading.Thread(target=motion.probe_to_x, args=(0.0, 4.0), daemon=True)
+        probe_thread.start()
+
+        assert started.wait(timeout=1.0)
+        baseline_calls = len(refresh_calls)
+        time.sleep(0.12)
+        assert len(refresh_calls) == baseline_calls
+
+        release.set()
+        probe_thread.join(timeout=1.0)
+        assert probe_thread.is_alive() is False
+        assert len(refresh_calls) >= baseline_calls + 1
     finally:
         motion.shutdown()
 
@@ -232,3 +296,63 @@ def test_unhomed_jog_timeout_clears_busy_tracking():
         assert motion.state.busy is False
     finally:
         motion.shutdown()
+
+
+def test_move_to_wait_uses_blocking_motion_completion_with_single_refresh():
+    motion = MotionController(
+        bounds=MachineBounds(x_min=0.0, x_max=10.0, y_min=-10.0, y_max=10.0),
+        limits=MotionLimits(v_max_mm_s=20.0, a_max_mm_s2=100.0),
+        simulate=False,
+        auto_connect=False,
+    )
+
+    class FakeMarlin:
+        def __init__(self):
+            self.calls = []
+
+        def move(self, axes, feedrate_mm_min=None):
+            self.calls.append(("move", axes, feedrate_mm_min))
+
+        def wait_for_motion(self, timeout_s=60.0):
+            self.calls.append(("wait_for_motion", timeout_s))
+
+        def position(self):
+            self.calls.append(("position",))
+            return Position(
+                logical={"X": 6.0, "Y": 2.0, "Z": 0.0},
+                counts={"X": 600, "Y": 200, "Z": 0},
+            )
+
+        def disable_steppers(self):
+            pass
+
+        def close(self):
+            pass
+
+    fake_marlin = FakeMarlin()
+    motion.marlin = fake_marlin
+
+    try:
+        motion.move_to(6.0, 2.0, wait=True)
+
+        assert fake_marlin.calls == [
+            ("move", {"X": 6.0, "Y": 2.0}, motion.limits.v_max_mm_s * 60.0),
+            ("wait_for_motion", 60.0),
+            ("position",),
+        ]
+        assert motion.state.x == 6.0
+        assert motion.state.y == 2.0
+        assert motion.state.busy is False
+    finally:
+        motion.shutdown()
+
+
+def test_motion_controller_rejects_invalid_feedrate_values():
+    with pytest.raises(ValueError, match="rapid_feed_mm_s"):
+        MotionController(
+            bounds=MachineBounds(x_min=0.0, x_max=10.0, y_min=-10.0, y_max=10.0),
+            limits=MotionLimits(v_max_mm_s=20.0, a_max_mm_s2=100.0),
+            simulate=False,
+            auto_connect=False,
+            rapid_feed_mm_s="3-.0",
+        )

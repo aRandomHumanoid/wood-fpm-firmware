@@ -253,6 +253,9 @@ class MarlinDriver:
         lines = self.send("G38.2 " + " ".join(parts), timeout_s=timeout_s)
         return parse_probe_position(lines)
 
+    def wait_for_motion(self, timeout_s: float = 60.0):
+        self.send("M400", timeout_s=timeout_s)
+
     def home(self, axes: str = "X Y"):
         """Block until G28 reports ``ok`` (Marlin doesn't ack until done)."""
         self.send(f"G28 {axes}", timeout_s=300.0)
@@ -339,6 +342,12 @@ class SimulatedMarlinDriver:
             for line in lines:
                 self._emit_transcript("rx", line)
             return lines
+        if tok == "M400":
+            with self._lock:
+                self._pos = dict(self._target)
+                self._move_end = self._move_start = 0.0
+            self._emit_transcript("rx", "ok")
+            return ["ok"]
         if tok in ("M84", "M410", "M201", "M203", "M205", "M220", "G90", "G91"):
             if tok == "G90":
                 self._relative_mode = False
@@ -440,6 +449,9 @@ class SimulatedMarlinDriver:
 
     def disable_steppers(self):
         self.send("M84")
+
+    def wait_for_motion(self, timeout_s: float = 60.0):
+        self.send("M400", timeout_s=timeout_s)
 
     def set_absolute_mode(self):
         pass

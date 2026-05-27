@@ -38,6 +38,13 @@ log = logging.getLogger(__name__)
 BLOCKING_IDLE_POLL_S = 0.1
 
 
+def _coerce_float(value: float, field_name: str) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be numeric, got {value!r}") from exc
+
+
 @dataclass
 class State:
     x: float = 0.0
@@ -75,15 +82,15 @@ class MotionController:
     ):
         self.bounds = bounds
         self.limits = limits
-        self.rapid_feed_mm_s = rapid_feed_mm_s
-        self.scan_feed_mm_s = scan_feed_mm_s
+        self.rapid_feed_mm_s = _coerce_float(rapid_feed_mm_s, "rapid_feed_mm_s")
+        self.scan_feed_mm_s = _coerce_float(scan_feed_mm_s, "scan_feed_mm_s")
         self._x_letter = x_axis
         self._y_letter = y_axis
         self._z_letter = z_axis
-        self._pos_tol = position_tolerance_mm
+        self._pos_tol = _coerce_float(position_tolerance_mm, "position_tolerance_mm")
         self._simulate = simulate
         self._marlin_port = marlin_port
-        self._marlin_baudrate = marlin_baudrate
+        self._marlin_baudrate = int(marlin_baudrate)
         self.marlin = None
 
         # Workspace feedrate currently in effect (for the next G1 we issue).
@@ -95,6 +102,7 @@ class MotionController:
         self._serial_listeners: list[SerialListener] = []
         self._stop_evt = threading.Event()
         self._action_lock = threading.Lock()  # serializes home/move
+        self._suspend_background_poll = threading.Event()
 
         # is_busy tracking: each non-blocking move records its target; the
         # poll loop clears busy once the reported logical target is reached
@@ -258,6 +266,7 @@ class MotionController:
 
     def set_feed_mm_s(self, v_mm_s: float):
         """Override workspace feedrate for the next G1."""
+        v_mm_s = _coerce_float(v_mm_s, "feed_mm_s")
         self._feed_mm_s = max(min(v_mm_s, self.limits.v_max_mm_s), 0.01)
 
     def _feedrate_mm_min(self) -> float:
@@ -359,6 +368,7 @@ class MotionController:
             self.bounds.check(target_x, y)
             self._target = None
             self._busy_flag = False
+            self._suspend_background_poll.set()
             self._set_state(busy=True, last_error="")
             self._broadcast()
             try:
@@ -367,14 +377,17 @@ class MotionController:
                     feedrate_mm_min=self._feedrate_mm_min(),
                     timeout_s=timeout_s,
                 )
-                if probe_pos:
+                refreshed = self._refresh_position()
+                if probe_pos and (
+                    not refreshed
+                    or abs(self.state.x - probe_pos.get(self._x_letter, self.state.x)) > self._pos_tol
+                    or abs(self.state.y - probe_pos.get(self._y_letter, self.state.y)) > self._pos_tol
+                ):
                     self._set_state(
                         x=probe_pos.get(self._x_letter, self.state.x),
                         y=probe_pos.get(self._y_letter, self.state.y),
                         z=probe_pos.get(self._z_letter, self.state.z),
                     )
-                else:
-                    self._refresh_position()
                 return True
             except MarlinError as e:
                 self._refresh_position()
@@ -388,6 +401,7 @@ class MotionController:
                 self._set_state(fault=True, last_error=str(e))
                 raise
             finally:
+                self._suspend_background_poll.clear()
                 self._target = None
                 self._busy_flag = False
                 self._set_state(busy=False)
@@ -497,6 +511,24 @@ class MotionController:
     # -------- busy / idle tracking --------
 
     def _wait_for_idle(self, timeout_s: float):
+        marlin = self._require_marlin()
+        if hasattr(marlin, "wait_for_motion"):
+            self._suspend_background_poll.set()
+            try:
+                marlin.wait_for_motion(timeout_s=timeout_s)
+                pos = marlin.position()
+            finally:
+                self._suspend_background_poll.clear()
+
+            self._clear_pending_motion()
+            self._set_state(
+                x=pos.logical.get(self._x_letter, self.state.x),
+                y=pos.logical.get(self._y_letter, self.state.y),
+                z=pos.logical.get(self._z_letter, self.state.z),
+                busy=False,
+            )
+            return
+
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             if self._refresh_position():
@@ -532,7 +564,8 @@ class MotionController:
         while not self._stop_evt.is_set():
             t0 = time.monotonic()
             try:
-                self._refresh_position()
+                if not self._suspend_background_poll.is_set():
+                    self._refresh_position()
                 self._broadcast()
             except Exception:
                 log.exception("poll loop")

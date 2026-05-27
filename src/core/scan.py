@@ -62,6 +62,7 @@ class ScanRunner:
         self._thread: Optional[threading.Thread] = None
         self._abort = threading.Event()
         self._running = False
+        self._state_lock = threading.Lock()
 
         self.on_started: Optional[StartedCb] = None
         self.on_point: Optional[PointCb] = None
@@ -69,20 +70,30 @@ class ScanRunner:
 
     @property
     def running(self) -> bool:
-        return self._running
+        thread = self._thread
+        if thread is not None and not thread.is_alive():
+            with self._state_lock:
+                if self._thread is thread and not thread.is_alive():
+                    self._running = False
+        with self._state_lock:
+            return self._running
 
     def start(self, req: ScanRequest):
-        if self._running:
-            raise RuntimeError("scan already running")
-        self._abort.clear()
-        self._thread = threading.Thread(target=self._run, args=(req,), daemon=True)
-        self._thread.start()
+        with self._state_lock:
+            thread = self._thread
+            if self._running and thread is not None and not thread.is_alive():
+                self._running = False
+            if self._running:
+                raise RuntimeError("scan already running")
+            self._abort.clear()
+            self._running = True
+            self._thread = threading.Thread(target=self._run, args=(req,), daemon=True)
+            self._thread.start()
 
     def abort(self):
         self._abort.set()
 
     def _run(self, req: ScanRequest):
-        self._running = True
         if self.on_started:
             try: self.on_started(req)
             except Exception: log.exception("on_started")
@@ -122,9 +133,12 @@ class ScanRunner:
         except Exception:
             log.exception("scan run")
         finally:
-            # restore default feed
-            self.motion.set_feed_mm_s(self.motion.limits.v_max_mm_s)
-            self._running = False
+            try:
+                self.motion.set_feed_mm_s(self.motion.limits.v_max_mm_s)
+            except Exception:
+                log.exception("restore default scan feed")
+            with self._state_lock:
+                self._running = False
             if self.on_complete:
                 try: self.on_complete(req.scan_id)
                 except Exception: log.exception("on_complete")

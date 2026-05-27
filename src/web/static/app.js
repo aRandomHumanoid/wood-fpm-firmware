@@ -14,6 +14,9 @@ let serialConsoleEntries = [];
 let displayedSerialConsoleEntries = [];
 let serialFilterState = { suppressKeepalive: false };
 let controllerBusy = false;
+let scanRunning = false;
+let loopScanRequested = false;
+let loopScanRequestBody = null;
 let jogRequestPending = false;
 let jogRequestObservedBusy = false;
 
@@ -45,6 +48,59 @@ function updateJogControls() {
   });
 }
 
+function updateScanControls() {
+  const scanControlsDisabled = scanRunning || loopScanRequested || controllerBusy || !serialConnected;
+  $("run-scan").disabled = scanControlsDisabled;
+  $("loop-scan").disabled = scanControlsDisabled;
+  $("loop-scan").textContent = loopScanRequested ? "Looping..." : "Loop scan";
+  $("abort-scan").disabled = !(scanRunning || loopScanRequested);
+  $("clear-plot").disabled = scanRunning || loopScanRequested;
+}
+
+function readScanRequestBody() {
+  return {
+    x_max: +$("s-xmax").value,
+    probe_target_x: +$("s-probe-x").value,
+    probe_speed_mm_s: +$("s-probe-speed").value,
+    y_max: +$("s-ymax").value,
+    y_min: +$("s-ymin").value,
+    n_samples: +$("s-n").value,
+  };
+}
+
+function clearLoopScanRequest() {
+  loopScanRequested = false;
+  loopScanRequestBody = null;
+  updateScanControls();
+}
+
+async function startScan(body) {
+  const result = await post("/api/scan", body);
+  if (!result.ok) {
+    if (result.error === "scan already running") {
+      scanRunning = true;
+      updateScanControls();
+    }
+    $("last-error").textContent = result.error || "scan failed";
+    return false;
+  }
+
+  scanRunning = true;
+  $("last-error").textContent = "";
+  updateScanControls();
+  return true;
+}
+
+async function startLoopScanIteration() {
+  if (!loopScanRequested || !loopScanRequestBody) {
+    return;
+  }
+  const started = await startScan(loopScanRequestBody);
+  if (!started) {
+    clearLoopScanRequest();
+  }
+}
+
 // ---------- live state ----------
 socket.on("state", (s) => {
   setVal("pos-x", s.x);
@@ -53,6 +109,9 @@ socket.on("state", (s) => {
   setLed("homed-led", s.homed, false);
   updateJogMode(s.homed);
   controllerBusy = !!s.busy;
+  if (typeof s.scan_running === "boolean") {
+    scanRunning = !!s.scan_running;
+  }
   if (jogRequestPending && controllerBusy) {
     jogRequestObservedBusy = true;
   }
@@ -61,6 +120,7 @@ socket.on("state", (s) => {
     jogRequestObservedBusy = false;
   }
   updateJogControls();
+  updateScanControls();
   setLed("busy-led",  s.busy,  false);
   setLed("fault-led", s.fault, s.fault);
   if (typeof s.serial_connected === "boolean") {
@@ -128,6 +188,7 @@ function updateSerialPanel(status = null) {
   setLed("serial-led", serialConnected, false);
   $("serial-toggle").textContent = serialConnected ? "Disconnect" : "Connect";
   $("serial-mode").textContent = serialSimulate ? "simulation" : "serial";
+  updateScanControls();
 }
 
 function appendSerialEntry(entry) {
@@ -439,6 +500,8 @@ async function syncPlotFromCsv() {
 }
 
 socket.on("scan_started", (req) => {
+  scanRunning = true;
+  updateScanControls();
   void queuePlotUpdate(async () => {
     ensurePlotScan(req.scan_id);
     await rebuildPlotFromState();
@@ -463,23 +526,38 @@ socket.on("scan_point", (pt) => {
 });
 
 socket.on("scan_complete", () => {
+  scanRunning = false;
+  updateScanControls();
   void queuePlotUpdate(syncPlotFromCsv);
+  if (loopScanRequested && loopScanRequestBody) {
+    void startLoopScanIteration();
+  }
 });
 
 $("run-scan").addEventListener("click", async () => {
-  const body = {
-    x_max: +$("s-xmax").value,
-    probe_target_x: +$("s-probe-x").value,
-    probe_speed_mm_s: +$("s-probe-speed").value,
-    y_max: +$("s-ymax").value,
-    y_min: +$("s-ymin").value,
-    n_samples: +$("s-n").value,
-  };
-  const r = await post("/api/scan", body);
-  if (!r.ok) $("last-error").textContent = r.error || "scan failed";
+  if (scanRunning || loopScanRequested || controllerBusy || !serialConnected) {
+    return;
+  }
+  await startScan(readScanRequestBody());
 });
 
-$("abort-scan").addEventListener("click", () => post("/api/scan/abort"));
+$("loop-scan").addEventListener("click", async () => {
+  if (scanRunning || loopScanRequested || controllerBusy || !serialConnected) {
+    return;
+  }
+  loopScanRequestBody = readScanRequestBody();
+  loopScanRequested = true;
+  updateScanControls();
+  await startLoopScanIteration();
+});
+
+$("abort-scan").addEventListener("click", async () => {
+  clearLoopScanRequest();
+  const r = await post("/api/scan/abort");
+  if (!r.ok) {
+    $("last-error").textContent = r.error || "abort failed";
+  }
+});
 
 $("clear-plot").addEventListener("click", async () => {
   const r = await post("/api/scan/history/clear");
@@ -496,3 +574,4 @@ void queuePlotUpdate(async () => {
 });
 void refreshSerialStatus();
 void refreshSerialConsole();
+updateScanControls();
