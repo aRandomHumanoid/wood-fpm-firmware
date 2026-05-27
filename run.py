@@ -5,14 +5,32 @@ from __future__ import annotations
 import argparse
 import logging
 import signal
+import threading
 from pathlib import Path
 
 import yaml
+from werkzeug.serving import make_server
 
 from src.core.limits import MachineBounds, MotionLimits
 from src.core.motion import MotionController
 from src.core.scan import ScanRunner
 from src.web.app import create_app
+from src.web.plot_viewer import create_plot_viewer_app
+from src.web.scan_history import ScanHistoryCsvStore
+
+
+class BackgroundServer:
+    def __init__(self, host: str, port: int, app, name: str):
+        self._server = make_server(host, port, app, threaded=True)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True, name=name)
+
+    def start(self):
+        self._thread.start()
+
+    def shutdown(self):
+        self._server.shutdown()
+        self._thread.join(timeout=2.0)
+        self._server.server_close()
 
 
 def load_config(path: Path) -> dict:
@@ -41,7 +59,7 @@ def build_controller(cfg: dict) -> tuple[MotionController, ScanRunner]:
     )
 
     scan = ScanRunner(motion=motion)
-    motion.start_polling(hz=5.0)   # M114 round-trip is ~5-15ms over USB-CDC
+    motion.start_polling(hz=1.0)
     return motion, scan
 
 
@@ -50,6 +68,7 @@ def main():
     parser.add_argument("--config", default="config.yaml", type=Path)
     parser.add_argument("--host", default=None, help="override config.network.host")
     parser.add_argument("--port", default=None, type=int)
+    parser.add_argument("--plot-port", default=None, type=int, help="override config.network.plot_port")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
@@ -60,15 +79,34 @@ def main():
 
     cfg = load_config(args.config)
     motion, scan = build_controller(cfg)
+    scan_history_path = args.config.resolve().parent / "scan_history.csv"
+    scan_history = ScanHistoryCsvStore(scan_history_path)
     app, sio = create_app(
         motion=motion,
         scan=scan,
-        scan_history_path=args.config.resolve().parent / "scan_history.csv",
+        scan_history_path=scan_history_path,
+        scan_history_store=scan_history,
+    )
+    plot_app = create_plot_viewer_app(
+        scan_history_path=scan_history_path,
+        scan_history_store=scan_history,
     )
 
     host = args.host or cfg["network"]["host"]
     port = args.port or cfg["network"]["port"]
+    plot_port = args.plot_port or cfg["network"].get("plot_port") or (port + 1)
     shutdown_started = False
+    plot_server: BackgroundServer | None = None
+
+    if plot_port == port:
+        logging.warning("plot viewer disabled because plot_port matches main port: %s", plot_port)
+    else:
+        try:
+            plot_server = BackgroundServer(host=host, port=plot_port, app=plot_app, name=f"plot-viewer-{plot_port}")
+            plot_server.start()
+            logging.info("plot viewer on http://%s:%d", host, plot_port)
+        except OSError as e:
+            logging.warning("plot viewer failed to bind on %s:%d: %s", host, plot_port, e)
 
     def shutdown():
         nonlocal shutdown_started
@@ -76,6 +114,8 @@ def main():
             return
         shutdown_started = True
         logging.info("shutting down")
+        if plot_server is not None:
+            plot_server.shutdown()
         scan.abort()
         motion.shutdown()
 

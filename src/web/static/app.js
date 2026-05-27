@@ -4,11 +4,15 @@
 // and the plot is redrawn from that CSV so the browser and stored history
 // stay in sync.
 
-const socket = io({ transports: ["polling"] });
+const socket = io({ transports: ["websocket", "polling"] });
+const MAX_SERIAL_CONSOLE_ENTRIES = 500;
+const plotOptions = { responsive: true };
 let serialConnected = false;
 let serialSimulate = false;
 let serialConsoleLoaded = false;
 let serialConsoleEntries = [];
+let displayedSerialConsoleEntries = [];
+let serialFilterState = { suppressKeepalive: false };
 let controllerBusy = false;
 let jogRequestPending = false;
 let jogRequestObservedBusy = false;
@@ -63,6 +67,7 @@ socket.on("state", (s) => {
     serialConnected = s.serial_connected;
     updateSerialPanel();
   }
+  $("block-override").disabled = !s.busy;
   $("estop-reset").disabled = s.last_error !== "E-STOP";
   $("fault-clear").disabled = !(s.busy || s.fault || s.last_error);
   $("last-error").textContent = s.last_error || "";
@@ -89,6 +94,10 @@ async function post(url, body) {
 
 function showActionError(result, fallbackMessage) {
   $("last-error").textContent = result?.error || fallbackMessage;
+}
+
+function formatError(err) {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function setSelectOptions(id, options, selectedValue) {
@@ -132,42 +141,60 @@ function appendSerialEntry(entry) {
   consoleEl.scrollTop = consoleEl.scrollHeight;
 }
 
-function filteredSerialEntries(entries) {
-  if (!$("serial-filter-m114")?.checked) return entries;
-  const filtered = [];
-  let suppressKeepalive = false;
-
-  entries.forEach((entry) => {
-    const line = String(entry.line || "").trim();
-    if (!suppressKeepalive && entry.direction === "tx" && /^M114(?:\s|;|$)/i.test(line)) {
-      suppressKeepalive = true;
-      return;
-    }
-
-    if (suppressKeepalive) {
-      if (entry.direction === "rx") {
-        const lower = line.toLowerCase();
-        if (lower === "ok" || lower.startsWith("ok ") || lower.startsWith("error") || lower.startsWith("!!")) {
-          suppressKeepalive = false;
-        }
-        return;
-      }
-      if (entry.direction !== "rx") {
-        suppressKeepalive = false;
-      }
-    }
-
-    filtered.push(entry);
-  });
-
-  return filtered;
+function createSerialFilterState() {
+  return { suppressKeepalive: false };
 }
 
-function replaceSerialConsole(entries) {
+function filterSerialEntry(entry, filterState) {
+  const line = String(entry.line || "").trim();
+  if (!filterState.suppressKeepalive && entry.direction === "tx" && /^M114(?:\s|;|$)/i.test(line)) {
+    filterState.suppressKeepalive = true;
+    return null;
+  }
+
+  if (filterState.suppressKeepalive) {
+    if (entry.direction === "rx") {
+      const lower = line.toLowerCase();
+      if (lower === "ok" || lower.startsWith("ok ") || lower.startsWith("error") || lower.startsWith("!!")) {
+        filterState.suppressKeepalive = false;
+      }
+      return null;
+    }
+    filterState.suppressKeepalive = false;
+  }
+
+  return entry;
+}
+
+function replaceSerialConsole(entries = displayedSerialConsoleEntries) {
   const consoleEl = $("serial-console");
   if (!consoleEl) return;
   consoleEl.innerHTML = "";
-  filteredSerialEntries(entries).forEach((entry) => appendSerialEntry(entry));
+  entries.forEach((entry) => appendSerialEntry(entry));
+}
+
+function rebuildSerialConsole() {
+  const filterEnabled = $("serial-filter-m114")?.checked;
+  const filterState = createSerialFilterState();
+  displayedSerialConsoleEntries = [];
+
+  serialConsoleEntries.forEach((entry) => {
+    const visibleEntry = filterEnabled ? filterSerialEntry(entry, filterState) : entry;
+    if (visibleEntry) {
+      displayedSerialConsoleEntries.push(visibleEntry);
+    }
+  });
+
+  serialFilterState = filterState;
+  replaceSerialConsole();
+}
+
+function trimSerialConsoleEntries() {
+  if (serialConsoleEntries.length <= MAX_SERIAL_CONSOLE_ENTRIES) {
+    return false;
+  }
+  serialConsoleEntries = serialConsoleEntries.slice(-MAX_SERIAL_CONSOLE_ENTRIES);
+  return true;
 }
 
 async function refreshSerialStatus() {
@@ -184,10 +211,10 @@ async function refreshSerialConsole() {
     const res = await fetch("/api/serial/console", { cache: "no-store" });
     const payload = await res.json();
     serialConsoleEntries = payload.entries || [];
-    replaceSerialConsole(serialConsoleEntries);
+    rebuildSerialConsole();
     serialConsoleLoaded = true;
   } catch (err) {
-    $("serial-status").textContent = err instanceof Error ? err.message : String(err);
+    $("serial-status").textContent = formatError(err);
   }
 }
 
@@ -228,6 +255,12 @@ $("estop-reset").addEventListener("click", async () => {
   const result = await post("/api/stop/reset");
   if (!result.ok) {
     showActionError(result, "E-STOP reset failed");
+  }
+});
+$("block-override").addEventListener("click", async () => {
+  const result = await post("/api/block/override");
+  if (!result.ok) {
+    showActionError(result, "block override failed");
   }
 });
 $("fault-clear").addEventListener("click", async () => {
@@ -274,20 +307,40 @@ $("serial-console-clear").addEventListener("click", async () => {
     return;
   }
   serialConsoleEntries = [];
-  replaceSerialConsole(serialConsoleEntries);
+  displayedSerialConsoleEntries = [];
+  serialFilterState = createSerialFilterState();
+  replaceSerialConsole();
 });
 $("serial-filter-m114").addEventListener("change", () => {
-  replaceSerialConsole(serialConsoleEntries);
+  rebuildSerialConsole();
 });
 
 socket.on("serial_entry", (entry) => {
   if (!serialConsoleLoaded) return;
   serialConsoleEntries.push(entry);
-  replaceSerialConsole(serialConsoleEntries);
+  if (trimSerialConsoleEntries()) {
+    rebuildSerialConsole();
+    return;
+  }
+
+  const visibleEntry = $("serial-filter-m114")?.checked
+    ? filterSerialEntry(entry, serialFilterState)
+    : entry;
+
+  if (!visibleEntry) {
+    return;
+  }
+
+  displayedSerialConsoleEntries.push(visibleEntry);
+  appendSerialEntry(visibleEntry);
 });
 
 // ---------- scan + plot ----------
 const plotEl = $("plot");
+const plotScanRows = new Map();
+const plotScanOrder = [];
+const plotTraceIndexByScanId = new Map();
+let plotUpdateQueue = Promise.resolve();
 const plotLayout = {
   paper_bgcolor: "#25252a",
   plot_bgcolor:  "#1c1c1f",
@@ -297,6 +350,63 @@ const plotLayout = {
   yaxis: { title: "X contact (mm)", gridcolor: "#333" },
   showlegend: true,
 };
+
+function queuePlotUpdate(task) {
+  plotUpdateQueue = plotUpdateQueue.then(task).catch((err) => {
+    $("last-error").textContent = formatError(err);
+  });
+  return plotUpdateQueue;
+}
+
+function resetPlotState() {
+  plotScanRows.clear();
+  plotScanOrder.length = 0;
+  plotTraceIndexByScanId.clear();
+}
+
+function ensurePlotScan(scanId) {
+  let rows = plotScanRows.get(scanId);
+  if (!rows) {
+    rows = [];
+    plotScanRows.set(scanId, rows);
+    plotScanOrder.push(scanId);
+  }
+  return rows;
+}
+
+function setPlotRows(rows) {
+  resetPlotState();
+  rows.forEach((row) => {
+    ensurePlotScan(row.scan_id).push(row);
+  });
+}
+
+function buildPlotTraces() {
+  plotTraceIndexByScanId.clear();
+  let traceIndex = 0;
+
+  return plotScanOrder.flatMap((scanId, idx) => {
+    const points = (plotScanRows.get(scanId) || [])
+      .slice()
+      .sort((a, b) => a.index - b.index)
+      .filter((row) => row.x != null && row.y != null);
+    if (points.length === 0) return [];
+
+    const age = plotScanOrder.length - 1 - idx;
+    plotTraceIndexByScanId.set(scanId, traceIndex);
+    traceIndex += 1;
+
+    return [{
+      x: points.map((row) => row.y),
+      y: points.map((row) => row.x),
+      mode: "lines+markers",
+      name: `scan ${idx + 1}`,
+      line: { width: 2 },
+      marker: { size: 6 },
+      opacity: age === 0 ? 1.0 : Math.max(0.1, 0.5 - 0.08 * age),
+    }];
+  });
+}
 
 function parseCsv(text) {
   const lines = text.trim().split(/\r?\n/).filter(Boolean);
@@ -317,54 +427,44 @@ function parseCsv(text) {
   });
 }
 
-function buildTraces(rows) {
-  const scans = new Map();
-  rows.forEach((row) => {
-    if (!scans.has(row.scan_id)) scans.set(row.scan_id, []);
-    scans.get(row.scan_id).push(row);
-  });
-
-  const ordered = Array.from(scans.entries());
-  return ordered.flatMap(([scanId, rowsForScan], idx) => {
-    const points = rowsForScan
-      .slice()
-      .sort((a, b) => a.index - b.index)
-      .filter((row) => row.x != null && row.y != null);
-    if (points.length === 0) return [];
-    const age = ordered.length - 1 - idx;
-    return [{
-      x: points.map((row) => row.y),
-      y: points.map((row) => row.x),
-      mode: "lines+markers",
-      name: `scan ${idx + 1}`,
-      line: { width: 2 },
-      marker: { size: 6 },
-      opacity: age === 0 ? 1.0 : Math.max(0.1, 0.5 - 0.08 * age),
-    }];
-  });
+async function rebuildPlotFromState() {
+  await Plotly.react(plotEl, buildPlotTraces(), plotLayout, plotOptions);
 }
 
-async function renderPlotFromCsv() {
-  try {
-    const res = await fetch("/api/scan/history.csv", { cache: "no-store" });
-    const rows = parseCsv(await res.text());
-    await Plotly.react(plotEl, buildTraces(rows), plotLayout, { responsive: true });
-  } catch (err) {
-    $("last-error").textContent = err instanceof Error ? err.message : String(err);
-  }
+async function syncPlotFromCsv() {
+  const res = await fetch("/api/scan/history.csv", { cache: "no-store" });
+  const rows = parseCsv(await res.text());
+  setPlotRows(rows);
+  await rebuildPlotFromState();
 }
 
 socket.on("scan_started", (req) => {
-  void req;
-  void renderPlotFromCsv();
+  void queuePlotUpdate(async () => {
+    ensurePlotScan(req.scan_id);
+    await rebuildPlotFromState();
+  });
 });
 
 socket.on("scan_point", (pt) => {
-  void pt;
-  void renderPlotFromCsv();
+  void queuePlotUpdate(async () => {
+    ensurePlotScan(pt.scan_id).push(pt);
+    if (pt.x == null || pt.y == null) {
+      return;
+    }
+
+    const traceIndex = plotTraceIndexByScanId.get(pt.scan_id);
+    if (traceIndex == null) {
+      await rebuildPlotFromState();
+      return;
+    }
+
+    await Plotly.extendTraces(plotEl, { x: [[pt.y]], y: [[pt.x]] }, [traceIndex]);
+  });
 });
 
-socket.on("scan_complete", () => { void renderPlotFromCsv(); });
+socket.on("scan_complete", () => {
+  void queuePlotUpdate(syncPlotFromCsv);
+});
 
 $("run-scan").addEventListener("click", async () => {
   const body = {
@@ -387,9 +487,12 @@ $("clear-plot").addEventListener("click", async () => {
     $("last-error").textContent = r.error || "clear failed";
     return;
   }
-  await renderPlotFromCsv();
+  await queuePlotUpdate(syncPlotFromCsv);
 });
 
-Plotly.newPlot(plotEl, [], plotLayout, { responsive: true }).then(() => renderPlotFromCsv());
+void queuePlotUpdate(async () => {
+  await Plotly.newPlot(plotEl, [], plotLayout, plotOptions);
+  await syncPlotFromCsv();
+});
 void refreshSerialStatus();
 void refreshSerialConsole();

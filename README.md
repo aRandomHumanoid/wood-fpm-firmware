@@ -45,7 +45,7 @@ A few Marlin firmware settings need to line up with this Pi-side firmware:
 - **`MIN_POS` / `MAX_POS`** for X and Y in Marlin should bracket the
   workspace rectangle in `config.yaml`'s `machine.bounds` (same units, mm).
 - **`EMERGENCY_PARSER`** strongly recommended so M114, M112, M410 are
-  processed even while moves are queued — the Pi polls M114 at 5 Hz for
+  processed even while moves are queued — the Pi polls M114 at 1 Hz for
   live state.
 - Set the right **`BAUDRATE`** in Marlin and choose the matching baudrate in
   the web UI's Serial panel when you connect.
@@ -59,6 +59,11 @@ python3 run.py --config config.yaml
 ```
 
 Visit `http://<pi-ip>:5000`.
+
+A separate plot-only page is also served on `http://<pi-ip>:5001` by default.
+It watches `scan_history.csv` and redraws live as new rows are appended.
+Change `network.plot_port` in `config.yaml` if you want that viewer on a
+different port.
 
 With `driver.simulate: false`, the web app starts disconnected on purpose;
 pick the serial port and baudrate in the Serial panel and connect from the UI.
@@ -117,7 +122,7 @@ the target is reached without a trigger.
 ┌────────────────────▼─────────────────────────────┐
 │  Flask + Flask-SocketIO  (src/web/)              │
 │  • REST: /api/jog /api/home /api/scan /api/stop  │
-│  • WS: state @ ~5 Hz, scan_point on contact      │
+│  • WS: state @ ~1 Hz, scan_point on contact      │
 └────────────────────┬─────────────────────────────┘
                      │ thread + queue
 ┌────────────────────▼─────────────────────────────┐
@@ -155,7 +160,7 @@ State refresh: `M114 → workspace (x, y, z) → broadcast to browser`.
 **[`src/core/motion.py`](src/core/motion.py)**
 `MotionController`: `home_all`, `move_to`, `jog`, `probe_to_x`, `halt`,
 `stop`, `set_feed_mm_s`. Forwards workspace XY commands to Marlin and runs
-a 5 Hz state-poll thread (M114) that converts back into the UI state.
+a 1 Hz state-poll thread (M114) that converts back into the UI state.
 Move completion waits for Marlin's stepper counts to settle after the
 logical target is reached, so scans start their probe stroke from the
 actual settled position.
@@ -203,11 +208,12 @@ path (Marlin does the kinematics) but kept as a reference / test fixture.
 | GET    | `/api/scan/history.csv` | —                                                             | Returns the persisted probe history CSV used by the plot |
 | POST   | `/api/scan/history/clear` | —                                                          | Clears the persisted probe history CSV when no scan is running |
 | POST   | `/api/stop`         | —                                                                 | E-stop: M410 + M84 |
+| POST   | `/api/block/override` | —                                                               | Force-releases the local Pi-side busy/block latch without clearing fault or E-STOP |
 | GET    | `/api/limits`       | —                                                                 | Reads bounds, v_max, a_max, feeds |
 
 Socket.IO events streamed to the browser:
 
-- `state` (~5 Hz) — `{x, y, z, homed, busy, fault, last_error}`
+- `state` (~1 Hz) — `{x, y, z, homed, busy, fault, last_error}`
 - `scan_started` — `{scan_id, probe_target_x, x_max, y_max, y_min, n_samples}`
 - `scan_point` — `{scan_id, index, x, y}` (`x = null` means no contact on that row)
 - `scan_complete` — `{scan_id}`

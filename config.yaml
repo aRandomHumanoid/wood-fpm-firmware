@@ -15,11 +15,11 @@ machine:
     x_max:  75.0
     y_min: -75.0
     y_max:  75.0
-  v_max_mm_s:   20.0   # TBD: max workspace feedrate
+  v_max_mm_s:   50.0   # TBD: max workspace feedrate
   a_max_mm_s2: 100.0   # TBD: max workspace acceleration
   jog_step_mm:  1.0    # default UI jog increment
   scan_feed_mm_s: 20.0  # slow feed during probing descent
-  rapid_feed_mm_s: 50.0
+  rapid_feed_mm_s: 3-.0
 
 marlin:
   # The web UI chooses the serial port and baudrate at connect time.
@@ -34,6 +34,7 @@ marlin:
 network:
   host: "0.0.0.0"    # 0.0.0.0 = LAN-accessible; 127.0.0.1 = local only
   port: 5000
+  plot_port: 5001     # separate read-only plot page with live CSV refresh
 
 driver:
   # Set to true to run without hardware (simulated Marlin board + simulated

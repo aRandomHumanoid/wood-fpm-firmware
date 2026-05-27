@@ -1,4 +1,5 @@
 import threading
+from pathlib import Path
 
 import src.web.app as web_app
 
@@ -108,6 +109,51 @@ def test_serial_status_includes_discovered_ports(tmp_path, monkeypatch):
             assert status["ports"][0] == "/dev/ttyUSB0"
             assert "/dev/ttyACM0" in status["ports"]
             assert status["port"] in status["ports"]
+    finally:
+        motion.shutdown()
+
+
+def test_discover_serial_ports_includes_virtual_pts(monkeypatch):
+    def fake_glob(self, pattern):
+        assert self == Path("/dev")
+        matches = {
+            "ttyACM*": [Path("/dev/ttyACM0")],
+            "ttyUSB*": [Path("/dev/ttyUSB0")],
+            "pts/[0-9]*": [Path("/dev/pts/7"), Path("/dev/pts/2")],
+        }
+        return matches.get(pattern, [])
+
+    monkeypatch.setattr(web_app.Path, "glob", fake_glob)
+
+    assert web_app.discover_serial_ports() == [
+        "/dev/ttyACM0",
+        "/dev/ttyUSB0",
+        "/dev/pts/2",
+        "/dev/pts/7",
+    ]
+
+
+def test_duplicate_state_emits_are_throttled(tmp_path, monkeypatch):
+    motion = build_motion()
+    try:
+        _app, socketio = create_app(
+            motion=motion,
+            scan=FakeScan(),
+            scan_history_path=tmp_path / "scan_history.csv",
+        )
+
+        emitted = []
+        monotonic_values = iter([0.0, 0.2, 1.3])
+
+        monkeypatch.setattr(web_app.time, "monotonic", lambda: next(monotonic_values))
+        monkeypatch.setattr(socketio, "emit", lambda event, payload: emitted.append((event, payload)))
+
+        motion._broadcast()  # noqa: SLF001
+        motion._broadcast()  # noqa: SLF001
+        motion._broadcast()  # noqa: SLF001
+
+        assert [event for event, _payload in emitted] == ["state", "state"]
+        assert emitted[0][1] == emitted[1][1]
     finally:
         motion.shutdown()
 
@@ -243,6 +289,41 @@ def test_busy_without_fault_can_be_cleared(tmp_path):
             assert motion._busy_flag is False  # noqa: SLF001
             assert motion._last_counts is None  # noqa: SLF001
             assert motion._stable_count_polls == 0  # noqa: SLF001
+    finally:
+        motion.shutdown()
+
+
+def test_override_block_releases_busy_without_clearing_fault(tmp_path):
+    motion = build_motion()
+    try:
+        app, _socketio = create_app(
+            motion=motion,
+            scan=FakeScan(),
+            scan_history_path=tmp_path / "scan_history.csv",
+        )
+
+        motion._target = {motion._x_letter: 5.0, motion._y_letter: 0.0}  # noqa: SLF001
+        motion._busy_flag = True  # noqa: SLF001
+        motion._last_counts = {motion._x_letter: 100}  # noqa: SLF001
+        motion._stable_count_polls = 1  # noqa: SLF001
+        motion._set_state(busy=True, fault=True, last_error="timeout waiting for move to complete")  # noqa: SLF001
+
+        with app.test_client() as client:
+            overridden = client.post("/api/block/override")
+            payload = overridden.get_json()
+            assert overridden.status_code == 200
+            assert payload["ok"] is True
+            assert payload["overridden"] is True
+            assert motion.state.busy is False
+            assert motion.state.fault is True
+            assert motion.state.last_error == "timeout waiting for move to complete"
+            assert motion._target is None  # noqa: SLF001
+            assert motion._busy_flag is False  # noqa: SLF001
+            assert motion._last_counts is None  # noqa: SLF001
+            assert motion._stable_count_polls == 0  # noqa: SLF001
+
+            overridden_again = client.post("/api/block/override")
+            assert overridden_again.get_json()["overridden"] is False
     finally:
         motion.shutdown()
 

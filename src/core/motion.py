@@ -35,6 +35,8 @@ from ..drivers.marlin import MarlinError, make_marlin
 
 log = logging.getLogger(__name__)
 
+BLOCKING_IDLE_POLL_S = 0.1
+
 
 @dataclass
 class State:
@@ -438,6 +440,28 @@ class MotionController:
         self._set_state(busy=False, fault=False, last_error="")
         self._broadcast_serial("meta", transcript_line)
 
+    def override_block(self) -> bool:
+        """Force-release the local blocking/busy emulation state.
+
+        This is an operator escape hatch for the Pi-side emulation layer only.
+        It does not stop physical motion on the controller board, clear E-STOP,
+        or clear the fault latch. The goal is to let a stuck ``wait=True`` path
+        or stale busy latch release without requiring a reconnect.
+        """
+        with self._state_lock:
+            blocked = self.state.busy or self._busy_flag or self._target is not None
+        if not blocked:
+            return False
+
+        self._target = None
+        self._busy_flag = False
+        self._last_counts = None
+        self._stable_count_polls = 0
+        self._set_state(busy=False)
+        self._broadcast_serial("meta", "Blocking override applied")
+        self._broadcast()
+        return True
+
     def clear_fault(self) -> bool:
         """Clear the local fault or busy latch without reconnecting serial."""
         with self._action_lock:
@@ -479,14 +503,14 @@ class MotionController:
                 if not self._busy_flag:
                     return
             else:
-                time.sleep(0.05)
+                time.sleep(BLOCKING_IDLE_POLL_S)
                 continue
-            time.sleep(0.03)
+            time.sleep(BLOCKING_IDLE_POLL_S)
         raise MarlinError("timeout waiting for move to complete")
 
     # -------- polling --------
 
-    def start_polling(self, hz: float = 5.0):
+    def start_polling(self, hz: float = 1.0):
         self._poll_thread = threading.Thread(target=self._poll_loop, args=(hz,), daemon=True)
         self._poll_thread.start()
 

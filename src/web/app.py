@@ -38,10 +38,12 @@ from .scan_history import ScanHistoryCsvStore
 
 log = logging.getLogger(__name__)
 
+STATE_HEARTBEAT_S = 1.0
+
 
 def discover_serial_ports(preferred_port: str | None = None) -> list[str]:
     ports = []
-    for pattern in ("/dev/ttyACM*", "/dev/ttyUSB*"):
+    for pattern in ("/dev/ttyACM*", "/dev/ttyUSB*", "/dev/pts/[0-9]*"):
         ports.extend(sorted(str(path) for path in Path("/dev").glob(pattern.removeprefix("/dev/"))))
     deduped = list(dict.fromkeys(ports))
     if preferred_port and preferred_port not in deduped:
@@ -53,13 +55,14 @@ def create_app(
     motion: MotionController,
     scan: ScanRunner,
     scan_history_path: Path | str = Path("scan_history.csv"),
+    scan_history_store: ScanHistoryCsvStore | None = None,
 ) -> tuple[Flask, SocketIO]:
     app = Flask(
         __name__,
         template_folder="templates",
         static_folder="static",
     )
-    scan_history = ScanHistoryCsvStore(Path(scan_history_path))
+    scan_history = scan_history_store or ScanHistoryCsvStore(Path(scan_history_path))
     serial_console = SerialConsoleBuffer()
     app.config["motion"] = motion
     app.config["scan"] = scan
@@ -70,11 +73,11 @@ def create_app(
         app,
         cors_allowed_origins="*",
         async_mode="threading",
-        allow_upgrades=False,
-        transports=["polling"],
     )
     active_scans: dict[str, ScanRequest] = {}
     motion_dispatch_lock = threading.Lock()
+    last_state_payload: Dict[str, object] | None = None
+    last_state_emit_at = 0.0
 
     def start_motion_task(target, *args) -> bool:
         if not motion_dispatch_lock.acquire(blocking=False):
@@ -100,7 +103,14 @@ def create_app(
 
     # --- streaming wiring ---
     def push_state(state):
-        socketio.emit("state", state.to_dict())
+        nonlocal last_state_payload, last_state_emit_at
+        payload = state.to_dict()
+        now = time.monotonic()
+        if payload == last_state_payload and (now - last_state_emit_at) < STATE_HEARTBEAT_S:
+            return
+        socketio.emit("state", payload)
+        last_state_payload = dict(payload)
+        last_state_emit_at = now
 
     motion.subscribe(push_state)
 
@@ -235,7 +245,7 @@ def create_app(
                 # Pre-check against the last-polled position so obvious
                 # out-of-range jogs return a clean 400 instead of failing
                 # silently in the worker thread. The state snapshot is up to
-                # ~200 ms stale (5 Hz polling) — borderline jogs still
+                # ~1 s stale (1 Hz polling) — borderline jogs still
                 # re-check against Marlin's fresh position inside motion.jog.
                 if motion.state.homed:
                     motion.bounds.check(current_x + dx, current_y + dy)
@@ -254,6 +264,10 @@ def create_app(
     @app.post("/api/stop/reset")
     def post_stop_reset():
         return jsonify({"ok": True, "reset": motion.reset_estop()})
+
+    @app.post("/api/block/override")
+    def post_block_override():
+        return jsonify({"ok": True, "overridden": motion.override_block()})
 
     @app.post("/api/fault/clear")
     def post_fault_clear():
