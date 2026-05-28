@@ -1,5 +1,6 @@
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import src.web.app as web_app
 
@@ -114,16 +115,30 @@ def test_serial_status_includes_discovered_ports(tmp_path, monkeypatch):
 
 
 def test_discover_serial_ports_includes_virtual_pts(monkeypatch):
-    def fake_glob(self, pattern):
-        assert self == Path("/dev")
-        matches = {
-            "ttyACM*": [Path("/dev/ttyACM0")],
-            "ttyUSB*": [Path("/dev/ttyUSB0")],
-            "pts/[0-9]*": [Path("/dev/pts/7"), Path("/dev/pts/2")],
-        }
-        return matches.get(pattern, [])
+    monkeypatch.setattr(web_app.Path, "glob", lambda self, pattern: [Path("/dev/pts/7"), Path("/dev/pts/2")])
+    monkeypatch.setattr(
+        web_app,
+        "discover_serial_ports",
+        web_app.discover_serial_ports,
+    )
 
-    monkeypatch.setattr(web_app.Path, "glob", fake_glob)
+    class FakeListPorts:
+        @staticmethod
+        def comports():
+            return [
+                SimpleNamespace(device="/dev/ttyACM0"),
+                SimpleNamespace(device="/dev/ttyUSB0"),
+            ]
+
+    monkeypatch.setitem(__import__("sys").modules, "serial.tools.list_ports", FakeListPorts)
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "serial.tools":
+            return SimpleNamespace(list_ports=FakeListPorts)
+        return original_import(name, globals, locals, fromlist, level)
+
+    original_import = __import__
+    monkeypatch.setattr("builtins.__import__", fake_import)
 
     assert web_app.discover_serial_ports() == [
         "/dev/ttyACM0",
@@ -131,6 +146,28 @@ def test_discover_serial_ports_includes_virtual_pts(monkeypatch):
         "/dev/pts/2",
         "/dev/pts/7",
     ]
+
+
+def test_discover_serial_ports_includes_windows_com_ports(monkeypatch):
+    monkeypatch.setattr(web_app.Path, "glob", lambda self, pattern: [])
+
+    class FakeListPorts:
+        @staticmethod
+        def comports():
+            return [
+                SimpleNamespace(device="COM3"),
+                SimpleNamespace(device="COM7"),
+            ]
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "serial.tools":
+            return SimpleNamespace(list_ports=FakeListPorts)
+        return original_import(name, globals, locals, fromlist, level)
+
+    original_import = __import__
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    assert web_app.discover_serial_ports() == ["COM3", "COM7"]
 
 
 def test_duplicate_state_emits_are_throttled(tmp_path, monkeypatch):

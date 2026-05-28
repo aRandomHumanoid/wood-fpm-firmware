@@ -43,8 +43,16 @@ STATE_HEARTBEAT_S = 1.0
 
 def discover_serial_ports(preferred_port: str | None = None) -> list[str]:
     ports = []
-    for pattern in ("/dev/ttyACM*", "/dev/ttyUSB*", "/dev/pts/[0-9]*"):
-        ports.extend(sorted(str(path) for path in Path("/dev").glob(pattern.removeprefix("/dev/"))))
+
+    try:
+        from serial.tools import list_ports
+
+        ports.extend(port.device for port in list_ports.comports() if port.device)
+    except Exception:
+        log.exception("serial port discovery failed")
+
+    ports.extend(sorted(str(path) for path in Path("/dev").glob("pts/[0-9]*")))
+
     deduped = list(dict.fromkeys(ports))
     if preferred_port and preferred_port not in deduped:
         deduped.insert(0, preferred_port)
